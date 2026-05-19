@@ -3356,6 +3356,26 @@ const configPage = `
                 <input type="text" id="tgChatId" placeholder="可从 @userinfobot 获取" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
               </div>
             </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label for="tgCallbackToken" class="block text-sm font-medium text-gray-700">回调 Token（TG_CALLBACK_TOKEN）</label>
+                <input type="text" id="tgCallbackToken" placeholder="用于 /api/telegram/callback/<token> 鉴权" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+              </div>
+              <div class="flex items-end">
+                <label class="inline-flex items-center">
+                  <input type="checkbox" id="tgConfirmEnabled" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" checked>
+                  <span class="ml-2 text-sm text-gray-700">启用 TG 按钮确认（TG_CONFIRM_ENABLED）</span>
+                </label>
+              </div>
+              <div>
+                <label for="tgResendInterval" class="block text-sm font-medium text-gray-700">未确认重推间隔（分钟）</label>
+                <input type="number" id="tgResendInterval" min="1" step="1" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" value="1440">
+              </div>
+              <div>
+                <label for="tgResendMaxTimes" class="block text-sm font-medium text-gray-700">未确认最大重推次数</label>
+                <input type="number" id="tgResendMaxTimes" min="0" step="1" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" value="3">
+              </div>
+            </div>
             <div class="flex justify-end">
               <button type="button" id="testTelegramBtn" class="btn-secondary text-white px-4 py-2 rounded-md text-sm font-medium">
                 <i class="fas fa-paper-plane mr-2"></i>测试 Telegram 通知
@@ -3549,6 +3569,10 @@ const configPage = `
         document.getElementById('adminUsername').value = config.ADMIN_USERNAME || '';
         document.getElementById('tgBotToken').value = config.TG_BOT_TOKEN || '';
         document.getElementById('tgChatId').value = config.TG_CHAT_ID || '';
+        document.getElementById('tgCallbackToken').value = config.TG_CALLBACK_TOKEN || '';
+        document.getElementById('tgConfirmEnabled').checked = config.TG_CONFIRM_ENABLED !== false;
+        document.getElementById('tgResendInterval').value = Number.isFinite(Number(config.TG_RESEND_INTERVAL_MINUTES)) ? Number(config.TG_RESEND_INTERVAL_MINUTES) : 1440;
+        document.getElementById('tgResendMaxTimes').value = Number.isFinite(Number(config.TG_RESEND_MAX_TIMES)) ? Number(config.TG_RESEND_MAX_TIMES) : 3;
         document.getElementById('notifyxApiKey').value = config.NOTIFYX_API_KEY || '';
         document.getElementById('webhookUrl').value = config.WEBHOOK_URL || '';
         document.getElementById('webhookMethod').value = config.WEBHOOK_METHOD || 'POST';
@@ -3693,6 +3717,10 @@ const configPage = `
         ADMIN_USERNAME: document.getElementById('adminUsername').value.trim(),
         TG_BOT_TOKEN: document.getElementById('tgBotToken').value.trim(),
         TG_CHAT_ID: document.getElementById('tgChatId').value.trim(),
+        TG_CALLBACK_TOKEN: document.getElementById('tgCallbackToken').value.trim(),
+        TG_CONFIRM_ENABLED: document.getElementById('tgConfirmEnabled').checked,
+        TG_RESEND_INTERVAL_MINUTES: Number(document.getElementById('tgResendInterval').value || 1440),
+        TG_RESEND_MAX_TIMES: Number(document.getElementById('tgResendMaxTimes').value || 3),
         NOTIFYX_API_KEY: document.getElementById('notifyxApiKey').value.trim(),
         WEBHOOK_URL: document.getElementById('webhookUrl').value.trim(),
         WEBHOOK_METHOD: document.getElementById('webhookMethod').value,
