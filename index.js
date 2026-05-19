@@ -4265,8 +4265,18 @@ const api = {
 
           await env.SUBSCRIPTIONS_KV.put('config', JSON.stringify(updatedConfig));
 
+          let webhookSyncMessage = '';
+          if (updatedConfig.TG_BOT_TOKEN && updatedConfig.TG_CALLBACK_TOKEN) {
+            const webhookSync = await ensureTelegramCallbackWebhook(updatedConfig, url.origin);
+            if (webhookSync.ok) {
+              webhookSyncMessage = 'Telegram webhook 已自动同步';
+            } else if (!webhookSync.skipped) {
+              webhookSyncMessage = 'Telegram webhook 自动同步失败: ' + webhookSync.message;
+            }
+          }
+
           return new Response(
-            JSON.stringify({ success: true }),
+            JSON.stringify({ success: true, webhookSyncMessage }),
             { headers: { 'Content-Type': 'application/json' } }
           );
         } catch (error) {
@@ -4424,7 +4434,7 @@ const api = {
       }
 
       if (parts[3] === 'test-callback' && method === 'POST') {
-        const result = await testSingleSubscriptionCallbackMessage(id, env);
+        const result = await testSingleSubscriptionCallbackMessage(id, env, url.origin);
         return new Response(JSON.stringify(result), { status: result.success ? 200 : 500, headers: { 'Content-Type': 'application/json' } });
       }
 
@@ -5008,7 +5018,7 @@ async function testSingleSubscriptionNotification(id, env) {
   }
 }
 
-async function testSingleSubscriptionCallbackMessage(id, env) {
+async function testSingleSubscriptionCallbackMessage(id, env, origin) {
   try {
     const subscriptions = await getAllSubscriptions(env);
     const index = subscriptions.findIndex(item => item.id === id);
@@ -5025,6 +5035,11 @@ async function testSingleSubscriptionCallbackMessage(id, env) {
     }
     if (!String(config.TG_CALLBACK_TOKEN || '').trim()) {
       return { success: false, message: '请先配置 TG_CALLBACK_TOKEN' };
+    }
+
+    const webhookSync = await ensureTelegramCallbackWebhook(config, origin);
+    if (!webhookSync.ok && !webhookSync.skipped) {
+      return { success: false, message: '自动同步 Telegram webhook 失败: ' + webhookSync.message };
     }
 
     const subscription = subscriptions[index];
@@ -5390,6 +5405,22 @@ async function callTelegramApi(method, config, payload) {
   });
   const result = await response.json();
   return { ok: !!result.ok, result };
+}
+
+async function ensureTelegramCallbackWebhook(config, origin) {
+  const callbackToken = String(config.TG_CALLBACK_TOKEN || '').trim();
+  if (!config.TG_BOT_TOKEN || !callbackToken || !origin) {
+    return { ok: false, skipped: true, message: 'missing webhook params' };
+  }
+
+  const callbackUrl = `${origin}/api/telegram/callback/${encodeURIComponent(callbackToken)}`;
+  const setResult = await callTelegramApi('setWebhook', config, { url: callbackUrl });
+  if (!setResult.ok) {
+    const desc = setResult.result && setResult.result.description ? setResult.result.description : 'setWebhook failed';
+    return { ok: false, skipped: false, message: desc };
+  }
+
+  return { ok: true, skipped: false, callbackUrl };
 }
 
 async function answerTelegramCallback(config, callbackQueryId, text) {
