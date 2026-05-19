@@ -5463,7 +5463,7 @@ async function sendNotificationToAllChannels(title, commonContent, config, logPr
     const notifyxContent = `## ${title}\n\n${commonContent}`;
     const success = await sendNotifyXNotification(title, notifyxContent, `订阅提醒`, config);
     console.log(`${logPrefix} 发送NotifyX通知 ${success ? '成功' : '失败'}`);
-    if (collectResults) channelResults.push({ channel: 'notifyx', success });
+    if (collectResults) channelResults.push({ channel: 'notifyx', success: !!success });
   }
   if (!skipTelegram && config.ENABLED_NOTIFIERS.includes('telegram')) {
     const telegramContent = `*${title}*\n\n${commonContent}`;
@@ -5524,7 +5524,22 @@ async function sendTelegramNotification(message, config, options = {}) {
       payload.reply_markup = options.replyMarkup;
     }
 
-    const { ok, result } = await callTelegramApi('sendMessage', config, payload);
+    let { ok, result } = await callTelegramApi('sendMessage', config, payload);
+
+    if (!ok && result && result.description && result.description.includes('parse entities')) {
+      console.warn('[Telegram] Markdown 解析失败，降级为纯文本重试');
+      const fallbackPayload = {
+        chat_id: config.TG_CHAT_ID,
+        text: message
+      };
+      if (options.replyMarkup) {
+        fallbackPayload.reply_markup = options.replyMarkup;
+      }
+      const retry = await callTelegramApi('sendMessage', config, fallbackPayload);
+      ok = retry.ok;
+      result = retry.result;
+    }
+
     console.log('[Telegram] 发送结果:', result);
 
     return {
