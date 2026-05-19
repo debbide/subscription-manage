@@ -5474,6 +5474,85 @@ function addPeriodToDate(date, periodValue, periodUnit) {
   return next;
 }
 
+function advanceSubscriptionByOneCycle(subscription) {
+  const periodValue = Number(subscription.periodValue) || 1;
+  const periodUnit = subscription.periodUnit || 'month';
+
+  if (!['day', 'month', 'year'].includes(periodUnit) || periodValue <= 0) {
+    return subscription;
+  }
+
+  if (subscription.useLunar) {
+    try {
+      const currentExpiry = new Date(subscription.expiryDate);
+      const lunar = lunarCalendar.solar2lunar(
+        currentExpiry.getFullYear(),
+        currentExpiry.getMonth() + 1,
+        currentExpiry.getDate()
+      );
+      if (!lunar) {
+        return subscription;
+      }
+      const nextLunar = lunarBiz.addLunarPeriod(lunar, periodValue, periodUnit);
+      const nextSolar = lunarBiz.lunar2solar(nextLunar);
+      const nextExpiryDate = new Date(nextSolar.year, nextSolar.month - 1, nextSolar.day);
+      return { ...subscription, expiryDate: nextExpiryDate.toISOString(), updatedAt: new Date().toISOString() };
+    } catch (error) {
+      return subscription;
+    }
+  }
+
+  const currentExpiry = new Date(subscription.expiryDate);
+  if (!Number.isFinite(currentExpiry.getTime())) {
+    return subscription;
+  }
+  const nextExpiryDate = addPeriodToDate(currentExpiry, periodValue, periodUnit);
+  return { ...subscription, expiryDate: nextExpiryDate.toISOString(), updatedAt: new Date().toISOString() };
+}
+
+function calculateCurrentReminderSummary(subscription, config) {
+  const timezone = config?.TIMEZONE || 'UTC';
+  const reminder = resolveReminderSetting(subscription);
+  const expiry = new Date(subscription.expiryDate);
+
+  if (!Number.isFinite(expiry.getTime())) {
+    return { ok: false, text: '无法计算提醒时间（到期时间无效）' };
+  }
+
+  const reminderTime = new Date(expiry);
+  if (reminder.unit === 'hour') {
+    reminderTime.setHours(reminderTime.getHours() - reminder.value);
+  } else {
+    reminderTime.setDate(reminderTime.getDate() - reminder.value);
+  }
+
+  return {
+    ok: true,
+    text: `➡️ 新到期：${formatTimeInTimezone(expiry, timezone, 'datetime')}\n⏰ 新提醒：${formatTimeInTimezone(reminderTime, timezone, 'datetime')}`
+  };
+}
+
+function buildTelegramAdvanceReceiptMessage(subscription, config, confirmedAt) {
+  const timezone = config?.TIMEZONE || 'UTC';
+  const confirmedTimeText = formatTimeInTimezone(new Date(confirmedAt), timezone, 'datetime');
+  const lines = [
+    '✅ *本轮提醒已确认并生效*',
+    '',
+    `🔔 订阅：${subscription.name || '未命名订阅'}`,
+    `🕒 确认时间：${confirmedTimeText}`
+  ];
+
+  const currentSummary = calculateCurrentReminderSummary(subscription, config);
+  if (currentSummary.ok) {
+    lines.push('', currentSummary.text);
+  } else {
+    lines.push('', `⚠️ ${currentSummary.text}`);
+  }
+
+  lines.push('', `🌍 时区：${formatTimezoneDisplay(timezone)}`);
+  return lines.join('\n');
+}
+
 function calculateNextReminderSummary(subscription, config) {
   const timezone = config?.TIMEZONE || 'UTC';
   const reminder = resolveReminderSetting(subscription);
@@ -6162,26 +6241,57 @@ async function handleTelegramCallback(request, env, config, path) {
       });
     }
 
-    const nextAck = {
-      ...ackState,
-      state: 'confirmed',
-      confirmedAt: new Date().toISOString(),
-      confirmedBy: callbackQuery.from ? String(callbackQuery.from.id || '') : '',
-      nextResendAt: ''
-    };
+    const confirmedAt = new Date().toISOString();
+    const confirmedBy = callbackQuery.from ? String(callbackQuery.from.id || '') : '';
 
-    subscriptions[index] = {
-      ...current,
-      telegramAck: nextAck
-    };
+    const shouldAdvance = current.autoRenew !== false;
+    const advancedSubscription = shouldAdvance ? advanceSubscriptionByOneCycle(current) : current;
+    const isAdvanced = shouldAdvance && advancedSubscription.expiryDate !== current.expiryDate;
 
+    let updatedSubscription;
+    let receiptText;
+
+    if (isAdvanced) {
+      const resetAck = getTelegramAckState(advancedSubscription);
+      updatedSubscription = {
+        ...advancedSubscription,
+        telegramAck: {
+          ...resetAck,
+          state: 'idle',
+          firstSentAt: '',
+          lastSentAt: '',
+          nextResendAt: '',
+          resendCount: 0,
+          confirmedAt: '',
+          confirmedBy: '',
+          messageId: null,
+          nonce: generateTelegramAckNonce()
+        }
+      };
+      receiptText = buildTelegramAdvanceReceiptMessage(updatedSubscription, config, confirmedAt);
+      await answerTelegramCallback(config, callbackQuery.id, '已确认并推进到下一周期');
+    } else {
+      const nextAck = {
+        ...ackState,
+        state: 'confirmed',
+        confirmedAt,
+        confirmedBy,
+        nextResendAt: ''
+      };
+      updatedSubscription = {
+        ...current,
+        telegramAck: nextAck
+      };
+      receiptText = buildTelegramConfirmReceiptMessage(updatedSubscription, config, confirmedAt);
+      await answerTelegramCallback(config, callbackQuery.id, '已确认，本轮结束');
+    }
+
+    subscriptions[index] = updatedSubscription;
     await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(subscriptions));
-    await answerTelegramCallback(config, callbackQuery.id, '已确认，下周期按原规则继续提醒');
 
     const message = callbackQuery.message || {};
     await clearTelegramInlineKeyboard(config, message.chat ? message.chat.id : null, message.message_id);
 
-    const receiptText = buildTelegramConfirmReceiptMessage(subscriptions[index], config, nextAck.confirmedAt);
     await sendTelegramNotification(receiptText, config);
 
     return new Response(JSON.stringify({ ok: true }), {
