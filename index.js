@@ -5249,6 +5249,84 @@ async function clearTelegramInlineKeyboard(config, chatId, messageId) {
   });
 }
 
+function addPeriodToDate(date, periodValue, periodUnit) {
+  const next = new Date(date);
+  const value = Number(periodValue) || 1;
+  if (periodUnit === 'day') {
+    next.setDate(next.getDate() + value);
+  } else if (periodUnit === 'month') {
+    next.setMonth(next.getMonth() + value);
+  } else if (periodUnit === 'year') {
+    next.setFullYear(next.getFullYear() + value);
+  }
+  return next;
+}
+
+function calculateNextReminderSummary(subscription, config) {
+  const timezone = config?.TIMEZONE || 'UTC';
+  const reminder = resolveReminderSetting(subscription);
+  const currentExpiry = new Date(subscription.expiryDate);
+  const periodValue = Number(subscription.periodValue) || 1;
+  const periodUnit = subscription.periodUnit || 'month';
+
+  if (!Number.isFinite(currentExpiry.getTime())) {
+    return {
+      ok: false,
+      text: '无法计算下次时间（到期时间无效）'
+    };
+  }
+
+  if (periodValue <= 0 || !['day', 'month', 'year'].includes(periodUnit)) {
+    return {
+      ok: false,
+      text: '无法计算下次时间（周期配置无效）'
+    };
+  }
+
+  const nextExpiry = addPeriodToDate(currentExpiry, periodValue, periodUnit);
+  const nextReminder = new Date(nextExpiry);
+
+  if (reminder.unit === 'hour') {
+    nextReminder.setHours(nextReminder.getHours() - reminder.value);
+  } else {
+    nextReminder.setDate(nextReminder.getDate() - reminder.value);
+  }
+
+  const nextExpiryText = formatTimeInTimezone(nextExpiry, timezone, 'datetime');
+  const nextReminderText = formatTimeInTimezone(nextReminder, timezone, 'datetime');
+
+  return {
+    ok: true,
+    nextExpiry,
+    nextReminder,
+    text: `➡️ 下次到期：${nextExpiryText}\n⏰ 下次提醒：${nextReminderText}`
+  };
+}
+
+function buildTelegramConfirmReceiptMessage(subscription, config, confirmedAt) {
+  const timezone = config?.TIMEZONE || 'UTC';
+  const confirmedTimeText = formatTimeInTimezone(new Date(confirmedAt), timezone, 'datetime');
+  const currentExpiryText = formatTimeInTimezone(new Date(subscription.expiryDate), timezone, 'datetime');
+
+  const baseLines = [
+    '✅ *本轮提醒已确认并生效*',
+    '',
+    `🔔 订阅：${subscription.name || '未命名订阅'}`,
+    `📅 本轮到期：${currentExpiryText}`,
+    `🕒 确认时间：${confirmedTimeText}`
+  ];
+
+  const nextSummary = calculateNextReminderSummary(subscription, config);
+  if (nextSummary.ok) {
+    baseLines.push('', nextSummary.text);
+  } else {
+    baseLines.push('', `⚠️ ${nextSummary.text}`);
+  }
+
+  baseLines.push('', `🌍 时区：${formatTimezoneDisplay(timezone)}`);
+  return baseLines.join('\n');
+}
+
 function shouldTriggerReminder(reminder, daysDiff, hoursDiff) {
   if (!reminder) {
     return false;
@@ -5863,6 +5941,9 @@ async function handleTelegramCallback(request, env, config, path) {
 
     const message = callbackQuery.message || {};
     await clearTelegramInlineKeyboard(config, message.chat ? message.chat.id : null, message.message_id);
+
+    const receiptText = buildTelegramConfirmReceiptMessage(subscriptions[index], config, nextAck.confirmedAt);
+    await sendTelegramNotification(receiptText, config);
 
     return new Response(JSON.stringify({ ok: true }), {
       headers: { 'Content-Type': 'application/json' }
