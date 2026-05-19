@@ -36,22 +36,12 @@ jobs:
           TARGET_KV_ID="${CF_KV_NAMESPACE_ID:-}"
 
           if [ -z "$TARGET_KV_ID" ]; then
-            KV_TITLE="SUBSCRIPTIONS_KV"
-            echo "CF_KV_NAMESPACE_ID not provided, creating KV namespace: $KV_TITLE"
-            CREATE_OUTPUT=$(wrangler kv namespace create "$KV_TITLE" --format json)
-            TARGET_KV_ID=$(echo "$CREATE_OUTPUT" | node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));console.log((d&&d.id)||'')")
-
-            if [ -z "$TARGET_KV_ID" ]; then
-              echo "Failed to create KV namespace"
-              echo "$CREATE_OUTPUT"
-              exit 1
-            fi
-
-            echo "Created KV namespace id: $TARGET_KV_ID"
-            echo "建议将该 ID 保存为 GitHub Secret: CF_KV_NAMESPACE_ID"
-          else
-            echo "Using provided CF_KV_NAMESPACE_ID: $TARGET_KV_ID"
+            echo "Missing required secret: CF_KV_NAMESPACE_ID"
+            echo "Please create a KV namespace first, then set its ID in GitHub Actions Secrets."
+            exit 1
           fi
+
+          echo "Using provided CF_KV_NAMESPACE_ID: $TARGET_KV_ID"
 
           if grep -q '^\[\[env.production.kv_namespaces\]\]' wrangler.toml; then
             sed -i -E '/^\[\[env.production.kv_namespaces\]\]/,/^\[/{s/^id\s*=\s*".*"/id = "'"$TARGET_KV_ID"'"/}' wrangler.toml

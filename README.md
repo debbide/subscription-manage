@@ -72,15 +72,16 @@
   <img src="https://img.shields.io/badge/Docs-Find_Account_ID-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white" alt="查看官方文档" />
 </a>
 
-##### `CF_KV_NAMESPACE_ID`（推荐：固定 KV 空间 ID）
-- 用途：强制绑定到你指定的 KV 空间，避免部署后切回旧库
-- 建议：首次创建后就把该 ID 保存到 GitHub Secret
-- 不填时：工作流会自动创建 `SUBSCRIPTIONS_KV` 并使用新 ID 部署（日志会提示你回填 Secret）
+##### `CF_KV_NAMESPACE_ID`（必填：KV 空间 ID）
+- 用途：固定 production 绑定，避免部署切回旧库
+- 获取方式：先在 Cloudflare 创建 KV 命名空间，再复制该命名空间的 ID
+- KV 管理入口（可直接点）：https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces
+- 官方文档：https://developers.cloudflare.com/kv/get-started/
 
 #### 3) 自动化行为
-- 工作流优先使用 `CF_KV_NAMESPACE_ID` 作为 production 绑定 ID
-- 未提供该参数时，会自动创建 `SUBSCRIPTIONS_KV` 并将新 ID 写入本次部署配置
-- 然后执行：`wrangler deploy --env production`
+- 工作流强制要求 `CF_KV_NAMESPACE_ID`，未配置会直接失败
+- 使用该 ID 写入 production 的 KV 绑定后执行：`wrangler deploy --env production`
+- 这样每次部署都绑定同一个 KV，不会漂移
 
 你需要截图给我的位置：
 1. GitHub 仓库的 Actions Secrets 页面（确认两个 Secret 已添加）
