@@ -32,16 +32,9 @@
 - **实时预览**：日期选择时实时显示对应农历
 - **用户偏好**：记住用户的显示偏好设置
 
-## 🚀 一键部署
+## 🚀 部署方式
 
-### 点击按钮，一键部署到 CloudFlare Workers,
-
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wangwangit/SubsTracker)
-
-
-> 适用于新部署的,以前部署过的直接替换js中的内容即可!
-
-### GitHub Actions 自动部署（推荐）
+### 方案 A：GitHub Actions 自动部署（推荐）
 
 已内置工作流：`.github/workflows/deploy-worker.yml`
 
@@ -49,11 +42,29 @@
 - push 到 `main` 自动部署
 - Actions 页面手动 `Run workflow`
 
-请在 GitHub 仓库 `Settings -> Secrets and variables -> Actions` 添加：
-- `CF_API_TOKEN`：Cloudflare API Token（需包含 Workers Scripts Edit、Workers KV Storage Edit 权限）
-- `CF_ACCOUNT_ID`：Cloudflare 账户 ID
+#### 1) 先打开 Secrets 页面（可直接点）
+- GitHub Actions Secrets 页面：`https://github.com/<你的GitHub用户名>/<你的仓库名>/settings/secrets/actions`
+- 例如你当前仓库可用：`https://github.com/debbide/subscription-manage/settings/secrets/actions`
 
-自动化行为：
+#### 2) 需要添加的参数（点击按钮直接跳转）
+
+##### `CF_API_TOKEN`（Cloudflare API Token）
+[![获取 CF_API_TOKEN](https://img.shields.io/badge/Cloudflare-获取_CF__API__TOKEN-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://dash.cloudflare.com/profile/api-tokens)
+
+- 需要权限：
+  - `Account` -> `Cloudflare Workers:Edit`
+  - `Account` -> `Workers KV Storage:Edit`
+- 官方说明：
+[![查看官方文档](https://img.shields.io/badge/Docs-Create_API_Token-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white)](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
+
+##### `CF_ACCOUNT_ID`（Cloudflare 账户 ID）
+[![获取 CF_ACCOUNT_ID](https://img.shields.io/badge/Cloudflare-查看_CF__ACCOUNT__ID-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://dash.cloudflare.com/)
+
+- 进入账户后，在右侧或 Overview 页面可看到 **Account ID**
+- 官方说明：
+[![查看官方文档](https://img.shields.io/badge/Docs-Find_Account_ID-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white)](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/)
+
+#### 3) 自动化行为
 - 工作流会先检查 `wrangler.toml` 中 KV ID
 - 若未配置或是占位符，会自动创建 `SUBSCRIPTIONS_KV` 命名空间并回填 `wrangler.toml`
 - 然后执行：`wrangler deploy --env production`
@@ -62,6 +73,16 @@
 1. GitHub 仓库的 Actions Secrets 页面（确认两个 Secret 已添加）
 2. 首次 Actions 运行日志中 `Ensure KV namespace exists` 步骤
 3. Cloudflare Workers 部署成功页面
+
+---
+
+### 方案 B：Cloudflare 一键部署（原本方式）
+
+点击按钮，一键部署到 Cloudflare Workers：
+
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wangwangit/SubsTracker)
+
+> 适用于新部署的,以前部署过的直接替换 js 中的内容即可!
 
 ## 📋 三步开始使用
 
