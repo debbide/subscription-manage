@@ -2017,6 +2017,7 @@ const lunarBiz = {
             '<div class="action-buttons-wrapper">' +
               '<button class="edit btn-primary text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-edit mr-1"></i>编辑</button>' +
               '<button class="test-notify btn-info text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-paper-plane mr-1"></i>测试</button>' +
+              '<button class="test-callback btn-warning text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-check-double mr-1"></i>回调测</button>' +
               '<button class="delete btn-danger text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-trash-alt mr-1"></i>删除</button>' +
               (subscription.isActive
                 ? '<button class="toggle-status btn-warning text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '" data-action="deactivate"><i class="fas fa-pause-circle mr-1"></i>停用</button>'
@@ -2041,6 +2042,10 @@ const lunarBiz = {
 
       document.querySelectorAll('.test-notify').forEach(button => {
         button.addEventListener('click', testSubscriptionNotification);
+      });
+
+      document.querySelectorAll('.test-callback').forEach(button => {
+        button.addEventListener('click', testSubscriptionCallbackMessage);
       });
 
       attachHoverListeners();
@@ -2116,7 +2121,31 @@ const lunarBiz = {
             button.disabled = false;
         }
     }
-    
+
+    async function testSubscriptionCallbackMessage(e) {
+        const button = e.target.tagName === 'BUTTON' ? e.target : e.target.parentElement;
+        const id = button.dataset.id;
+        const originalContent = button.innerHTML;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>';
+        button.disabled = true;
+
+        try {
+            const response = await fetch('/api/subscriptions/' + id + '/test-callback', { method: 'POST' });
+            const result = await response.json();
+            if (result.success) {
+                showToast(result.message || '回调测试消息已发送', 'success');
+            } else {
+                showToast(result.message || '回调测试消息发送失败', 'error');
+            }
+        } catch (error) {
+            console.error('回调测试消息失败:', error);
+            showToast('发送回调测试消息时发生错误', 'error');
+        } finally {
+            button.innerHTML = originalContent;
+            button.disabled = false;
+        }
+    }
+
     async function toggleSubscriptionStatus(e) {
       const id = e.target.dataset.id || e.target.parentElement.dataset.id;
       const action = e.target.dataset.action || e.target.parentElement.dataset.action;
@@ -4366,6 +4395,11 @@ const api = {
         return new Response(JSON.stringify(result), { status: result.success ? 200 : 500, headers: { 'Content-Type': 'application/json' } });
       }
 
+      if (parts[3] === 'test-callback' && method === 'POST') {
+        const result = await testSingleSubscriptionCallbackMessage(id, env);
+        return new Response(JSON.stringify(result), { status: result.success ? 200 : 500, headers: { 'Content-Type': 'application/json' } });
+      }
+
       if (method === 'GET') {
         const subscription = await getSubscription(id, env);
 
@@ -4902,11 +4936,11 @@ async function testSingleSubscriptionNotification(id, env) {
     const timezone = config?.TIMEZONE || 'UTC';
     const formattedExpiryDate = formatTimeInTimezone(new Date(subscription.expiryDate), timezone, 'date');
     const currentTime = formatTimeInTimezone(new Date(), timezone, 'datetime');
-    
+
     // 获取日历类型和自动续期状态
     const calendarType = subscription.useLunar ? '农历' : '公历';
     const autoRenewText = subscription.autoRenew ? '是' : '否';
-    
+
     const commonContent = `**订阅详情**
 类型: ${subscription.customType || '其他'}
 日历类型: ${calendarType}
@@ -4943,6 +4977,54 @@ async function testSingleSubscriptionNotification(id, env) {
   } catch (error) {
     console.error('[手动测试] 发送失败:', error);
     return { success: false, message: '发送时发生错误: ' + error.message };
+  }
+}
+
+async function testSingleSubscriptionCallbackMessage(id, env) {
+  try {
+    const subscription = await getSubscription(id, env);
+    if (!subscription) {
+      return { success: false, message: '未找到该订阅' };
+    }
+
+    const config = await getConfig(env);
+    if (!config.TG_BOT_TOKEN || !config.TG_CHAT_ID) {
+      return { success: false, message: '请先在系统配置中填写 Telegram Bot Token 和 Chat ID' };
+    }
+    if (config.TG_CONFIRM_ENABLED === false) {
+      return { success: false, message: '请先启用 TG_CONFIRM_ENABLED' };
+    }
+    if (!String(config.TG_CALLBACK_TOKEN || '').trim()) {
+      return { success: false, message: '请先配置 TG_CALLBACK_TOKEN' };
+    }
+
+    const ackState = getTelegramAckState(subscription);
+    const callbackData = await buildTelegramCallbackData({ ...subscription, telegramAck: ackState }, config);
+    const timezone = config?.TIMEZONE || 'UTC';
+    const expiryText = formatTimeInTimezone(new Date(subscription.expiryDate), timezone, 'datetime');
+
+    const telegramContent = [
+      '*回调流程测试消息*',
+      '',
+      `订阅: ${subscription.name || '未命名订阅'}`,
+      `到期: ${expiryText}`,
+      '点击下方“✅ 已处理”可立即验证 callback 回调链路。'
+    ].join('\n');
+
+    const sent = await sendTelegramNotification(telegramContent, config, {
+      replyMarkup: {
+        inline_keyboard: [[{ text: '✅ 已处理', callback_data: callbackData }]]
+      }
+    });
+
+    if (!sent.ok) {
+      return { success: false, message: '回调测试消息发送失败，请检查 Telegram 配置' };
+    }
+
+    return { success: true, message: '回调测试消息已发送，请到 Telegram 点击“✅ 已处理”验证回调' };
+  } catch (error) {
+    console.error('[回调测试] 发送失败:', error);
+    return { success: false, message: '发送回调测试消息时发生错误: ' + error.message };
   }
 }
 
