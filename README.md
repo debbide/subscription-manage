@@ -2,6 +2,10 @@
 
 基于Cloudflare Workers的轻量级订阅管理系统，帮助您轻松跟踪各类订阅服务的到期时间，并通过 Telegram、Webhook 等多渠道发送及时提醒。
 
+> [!IMPORTANT]
+> 本仓库为增强改版（偏自用场景），新增了 GitHub Actions 部署、Telegram 回调确认闭环（确认后网页侧状态同步推进）、订阅级测试入口等能力。
+> 如你是自用或二次使用本项目，也请支持原作者：[wangwangit/SubsTracker](https://github.com/wangwangit/SubsTracker)。
+
 ![image](https://github.com/user-attachments/assets/22ff1592-7836-4f73-aa13-24e9d43d7064)
 
 ## ✨ 功能特色
