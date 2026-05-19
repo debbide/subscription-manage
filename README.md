@@ -41,6 +41,22 @@
 
 > 适用于新部署的,以前部署过的直接替换js中的内容即可!
 
+### GitHub Actions 自动部署（推荐）
+
+已内置工作流：`.github/workflows/deploy-worker.yml`
+
+触发方式：
+- push 到 `main` 自动部署
+- Actions 页面手动 `Run workflow`
+
+请在 GitHub 仓库 `Settings -> Secrets and variables -> Actions` 添加：
+- `CF_API_TOKEN`：Cloudflare API Token（需包含 Workers Scripts Edit、Workers KV Storage Edit 权限）
+- `CF_ACCOUNT_ID`：Cloudflare 账户 ID
+
+说明：
+- 工作流会执行：`wrangler deploy --env production`
+- 你的 KV 绑定与 cron 仍以 `wrangler.toml` 为准
+
 ## 📋 三步开始使用
 
 ### 1️⃣ 一键部署
