@@ -9,8 +9,8 @@ name = "subscription-manager"
 [env.staging]
 name = "subscription-manager-staging"
 
-# KV 命名空间配置
-[[kv_namespaces]]
+# KV 命名空间配置（生产环境）
+[[env.production.kv_namespaces]]
 binding = "SUBSCRIPTIONS_KV"
 preview_id = "your-preview-kv-namespace-id"
 id = "1a0cf556e7354702ab48d7ad18c0ebb2"

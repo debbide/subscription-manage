@@ -34,7 +34,7 @@ jobs:
             exit 1
           fi
 
-          CURRENT_KV_ID=$(awk '/\[\[kv_namespaces\]\]/{flag=1;next} flag && /^id\s*=/{gsub(/"/,"",$3); print $3; exit}' wrangler.toml)
+          CURRENT_KV_ID=$(awk '/\[\[env.production.kv_namespaces\]\]/{flag=1;next} flag && /^id\s*=/{gsub(/"/,"",$3); print $3; exit}' wrangler.toml)
 
           if [ -n "$CURRENT_KV_ID" ] && [ "$CURRENT_KV_ID" != "your-kv-namespace-id" ]; then
             echo "KV id already configured: $CURRENT_KV_ID"
@@ -53,14 +53,11 @@ jobs:
 
           echo "Created KV namespace id: $NEW_ID"
 
-          if grep -q '^id\s*=\s*"' wrangler.toml; then
-            sed -i -E "0,/^id\s*=\s*\".*\"/s//id = \"$NEW_ID\"/" wrangler.toml
+          if grep -q '^\[\[env.production.kv_namespaces\]\]' wrangler.toml; then
+            sed -i -E '/^\[\[env.production.kv_namespaces\]\]/,/^\[/{s/^id\s*=\s*".*"/id = "'"$NEW_ID"'"/}' wrangler.toml
+            sed -i -E '/^\[\[env.production.kv_namespaces\]\]/,/^\[/{s/^preview_id\s*=\s*".*"/preview_id = "'"$NEW_ID"'"/}' wrangler.toml
           else
-            sed -i -E "/\[\[kv_namespaces\]\]/a id = \"$NEW_ID\"" wrangler.toml
-          fi
-
-          if grep -q '^preview_id\s*=\s*"' wrangler.toml; then
-            sed -i -E "0,/^preview_id\s*=\s*\".*\"/s//preview_id = \"$NEW_ID\"/" wrangler.toml
+            printf '\n[[env.production.kv_namespaces]]\nbinding = "SUBSCRIPTIONS_KV"\nid = "%s"\npreview_id = "%s"\n' "$NEW_ID" "$NEW_ID" >> wrangler.toml
           fi
 
           echo "wrangler.toml updated with KV id"
