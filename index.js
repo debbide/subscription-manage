@@ -2017,7 +2017,9 @@ const lunarBiz = {
             '<div class="action-buttons-wrapper">' +
               '<button class="edit btn-primary text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-edit mr-1"></i>编辑</button>' +
               '<button class="test-notify btn-info text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-paper-plane mr-1"></i>测试</button>' +
-              '<button class="test-callback btn-warning text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-check-double mr-1"></i>回调测</button>' +
+              (callbackTestButtonEnabled
+                ? '<button class="test-callback btn-warning text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-check-double mr-1"></i>回调测</button>'
+                : '') +
               '<button class="delete btn-danger text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-trash-alt mr-1"></i>删除</button>' +
               (subscription.isActive
                 ? '<button class="toggle-status btn-warning text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '" data-action="deactivate"><i class="fas fa-pause-circle mr-1"></i>停用</button>'
@@ -3010,7 +3012,8 @@ const lunarBiz = {
     
     // 全局时区配置
     let globalTimezone = 'UTC';
-    
+    let callbackTestButtonEnabled = true;
+
     // 检测时区更新
     function checkTimezoneUpdate() {
       const lastUpdate = localStorage.getItem('timezoneUpdated');
@@ -3026,8 +3029,15 @@ const lunarBiz = {
     }
     
     // 页面加载时检查时区更新
-    window.addEventListener('load', () => {
+    window.addEventListener('load', async () => {
       checkTimezoneUpdate();
+      try {
+        const response = await fetch('/api/config');
+        const config = await response.json();
+        callbackTestButtonEnabled = config.TG_CALLBACK_TEST_BUTTON_ENABLED !== false;
+      } catch (error) {
+        console.error('加载回调测试按钮开关失败:', error);
+      }
       loadSubscriptions();
     });
     
@@ -3041,6 +3051,7 @@ const lunarBiz = {
         const response = await fetch('/api/config');
         const config = await response.json();
         globalTimezone = config.TIMEZONE || 'UTC';
+        callbackTestButtonEnabled = config.TG_CALLBACK_TEST_BUTTON_ENABLED !== false;
         
         // 格式化当前时间
         function formatTime(dt, tz) {
@@ -3110,8 +3121,9 @@ const lunarBiz = {
           try {
             const response = await fetch('/api/config');
             const config = await response.json();
+            callbackTestButtonEnabled = config.TG_CALLBACK_TEST_BUTTON_ENABLED !== false;
             const newTimezone = config.TIMEZONE || 'UTC';
-            
+
             if (globalTimezone !== newTimezone) {
               globalTimezone = newTimezone;
               console.log('时区已更新为:', globalTimezone);
@@ -3122,7 +3134,7 @@ const lunarBiz = {
             console.error('检查时区更新失败:', error);
           }
         }, 30000);
-        
+
         // 初始加载订阅列表
         loadSubscriptions();
       } catch (e) {
@@ -3375,6 +3387,12 @@ const configPage = `
                 <label for="tgResendMaxTimes" class="block text-sm font-medium text-gray-700">未确认最大重推次数</label>
                 <input type="number" id="tgResendMaxTimes" min="0" step="1" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" value="3">
               </div>
+              <div class="md:col-span-2">
+                <label class="inline-flex items-center">
+                  <input type="checkbox" id="tgCallbackTestButtonEnabled" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" checked>
+                  <span class="ml-2 text-sm text-gray-700">在订阅面板显示“回调测”按钮（TG_CALLBACK_TEST_BUTTON_ENABLED）</span>
+                </label>
+              </div>
             </div>
             <div class="flex justify-end">
               <button type="button" id="testTelegramBtn" class="btn-secondary text-white px-4 py-2 rounded-md text-sm font-medium">
@@ -3573,6 +3591,7 @@ const configPage = `
         document.getElementById('tgConfirmEnabled').checked = config.TG_CONFIRM_ENABLED !== false;
         document.getElementById('tgResendInterval').value = Number.isFinite(Number(config.TG_RESEND_INTERVAL_MINUTES)) ? Number(config.TG_RESEND_INTERVAL_MINUTES) : 1440;
         document.getElementById('tgResendMaxTimes').value = Number.isFinite(Number(config.TG_RESEND_MAX_TIMES)) ? Number(config.TG_RESEND_MAX_TIMES) : 3;
+        document.getElementById('tgCallbackTestButtonEnabled').checked = config.TG_CALLBACK_TEST_BUTTON_ENABLED !== false;
         document.getElementById('notifyxApiKey').value = config.NOTIFYX_API_KEY || '';
         document.getElementById('webhookUrl').value = config.WEBHOOK_URL || '';
         document.getElementById('webhookMethod').value = config.WEBHOOK_METHOD || 'POST';
@@ -3721,6 +3740,7 @@ const configPage = `
         TG_CONFIRM_ENABLED: document.getElementById('tgConfirmEnabled').checked,
         TG_RESEND_INTERVAL_MINUTES: Number(document.getElementById('tgResendInterval').value || 1440),
         TG_RESEND_MAX_TIMES: Number(document.getElementById('tgResendMaxTimes').value || 3),
+        TG_CALLBACK_TEST_BUTTON_ENABLED: document.getElementById('tgCallbackTestButtonEnabled').checked,
         NOTIFYX_API_KEY: document.getElementById('notifyxApiKey').value.trim(),
         WEBHOOK_URL: document.getElementById('webhookUrl').value.trim(),
         WEBHOOK_METHOD: document.getElementById('webhookMethod').value,
@@ -4230,7 +4250,8 @@ const api = {
             TG_CONFIRM_ENABLED: newConfig.TG_CONFIRM_ENABLED !== false,
             TG_RESEND_INTERVAL_MINUTES: Number.isFinite(Number(newConfig.TG_RESEND_INTERVAL_MINUTES)) ? Math.max(1, Math.floor(Number(newConfig.TG_RESEND_INTERVAL_MINUTES))) : (Number.isFinite(Number(config.TG_RESEND_INTERVAL_MINUTES)) ? Math.max(1, Math.floor(Number(config.TG_RESEND_INTERVAL_MINUTES))) : 1440),
             TG_RESEND_MAX_TIMES: Number.isFinite(Number(newConfig.TG_RESEND_MAX_TIMES)) ? Math.max(0, Math.floor(Number(newConfig.TG_RESEND_MAX_TIMES))) : (Number.isFinite(Number(config.TG_RESEND_MAX_TIMES)) ? Math.max(0, Math.floor(Number(config.TG_RESEND_MAX_TIMES))) : 3),
-            TG_CALLBACK_TOKEN: (newConfig.TG_CALLBACK_TOKEN || config.TG_CALLBACK_TOKEN || '').trim()
+            TG_CALLBACK_TOKEN: (newConfig.TG_CALLBACK_TOKEN || config.TG_CALLBACK_TOKEN || '').trim(),
+            TG_CALLBACK_TEST_BUTTON_ENABLED: newConfig.TG_CALLBACK_TEST_BUTTON_ENABLED !== false
           };
 
           const rawNotificationHours = Array.isArray(newConfig.NOTIFICATION_HOURS)
@@ -4640,7 +4661,8 @@ async function getConfig(env) {
       TG_CONFIRM_ENABLED: config.TG_CONFIRM_ENABLED !== false,
       TG_RESEND_INTERVAL_MINUTES: Number.isFinite(Number(config.TG_RESEND_INTERVAL_MINUTES)) ? Math.max(1, Math.floor(Number(config.TG_RESEND_INTERVAL_MINUTES))) : 1440,
       TG_RESEND_MAX_TIMES: Number.isFinite(Number(config.TG_RESEND_MAX_TIMES)) ? Math.max(0, Math.floor(Number(config.TG_RESEND_MAX_TIMES))) : 3,
-      TG_CALLBACK_TOKEN: config.TG_CALLBACK_TOKEN || ''
+      TG_CALLBACK_TOKEN: config.TG_CALLBACK_TOKEN || '',
+      TG_CALLBACK_TEST_BUTTON_ENABLED: config.TG_CALLBACK_TEST_BUTTON_ENABLED !== false
     };
 
     console.log('[配置] 最终配置用户名:', finalConfig.ADMIN_USERNAME);
@@ -4676,7 +4698,8 @@ async function getConfig(env) {
       TG_CONFIRM_ENABLED: true,
       TG_RESEND_INTERVAL_MINUTES: 1440,
       TG_RESEND_MAX_TIMES: 3,
-      TG_CALLBACK_TOKEN: ''
+      TG_CALLBACK_TOKEN: '',
+      TG_CALLBACK_TEST_BUTTON_ENABLED: true
     };
   }
 }
