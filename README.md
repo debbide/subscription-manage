@@ -49,20 +49,28 @@
 #### 2) 需要添加的参数（点击按钮直接跳转）
 
 ##### `CF_API_TOKEN`（Cloudflare API Token）
-[![获取 CF_API_TOKEN](https://img.shields.io/badge/Cloudflare-获取_CF__API__TOKEN-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://dash.cloudflare.com/profile/api-tokens)
+<a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Cloudflare-获取_CF__API__TOKEN-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="获取 CF_API_TOKEN" />
+</a>
 
 - 需要权限：
   - `Account` -> `Cloudflare Workers:Edit`
   - `Account` -> `Workers KV Storage:Edit`
 - 官方说明：
-[![查看官方文档](https://img.shields.io/badge/Docs-Create_API_Token-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white)](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
+<a href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Docs-Create_API_Token-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white" alt="查看官方文档" />
+</a>
 
 ##### `CF_ACCOUNT_ID`（Cloudflare 账户 ID）
-[![获取 CF_ACCOUNT_ID](https://img.shields.io/badge/Cloudflare-查看_CF__ACCOUNT__ID-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://dash.cloudflare.com/)
+<a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Cloudflare-查看_CF__ACCOUNT__ID-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="获取 CF_ACCOUNT_ID" />
+</a>
 
 - 进入账户后，在右侧或 Overview 页面可看到 **Account ID**
 - 官方说明：
-[![查看官方文档](https://img.shields.io/badge/Docs-Find_Account_ID-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white)](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/)
+<a href="https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Docs-Find_Account_ID-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white" alt="查看官方文档" />
+</a>
 
 #### 3) 自动化行为
 - 工作流会先检查 `wrangler.toml` 中 KV ID
