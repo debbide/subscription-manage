@@ -53,9 +53,15 @@
 - `CF_API_TOKEN`：Cloudflare API Token（需包含 Workers Scripts Edit、Workers KV Storage Edit 权限）
 - `CF_ACCOUNT_ID`：Cloudflare 账户 ID
 
-说明：
-- 工作流会执行：`wrangler deploy --env production`
-- 你的 KV 绑定与 cron 仍以 `wrangler.toml` 为准
+自动化行为：
+- 工作流会先检查 `wrangler.toml` 中 KV ID
+- 若未配置或是占位符，会自动创建 `SUBSCRIPTIONS_KV` 命名空间并回填 `wrangler.toml`
+- 然后执行：`wrangler deploy --env production`
+
+你需要截图给我的位置：
+1. GitHub 仓库的 Actions Secrets 页面（确认两个 Secret 已添加）
+2. 首次 Actions 运行日志中 `Ensure KV namespace exists` 步骤
+3. Cloudflare Workers 部署成功页面
 
 ## 📋 三步开始使用
 
