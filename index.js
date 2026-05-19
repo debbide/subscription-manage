@@ -4900,13 +4900,29 @@ async function testSingleSubscriptionNotification(id, env) {
 发送时间: ${currentTime}
 当前时区: ${formatTimezoneDisplay(timezone)}`;
 
-    // 使用多渠道发送
+    // 使用多渠道发送（返回每个渠道真实结果）
     const tags = extractTagsFromSubscriptions([subscription]);
-    await sendNotificationToAllChannels(title, commonContent, config, '[手动测试]', {
-      metadata: { tags }
+    const channelResults = await sendNotificationToAllChannels(title, commonContent, config, '[手动测试]', {
+      metadata: { tags },
+      collectResults: true
     });
 
-    return { success: true, message: '测试通知已发送到所有启用的渠道' };
+    const attempted = Array.isArray(channelResults) ? channelResults.length : 0;
+    const successCount = Array.isArray(channelResults) ? channelResults.filter(item => item.success).length : 0;
+
+    if (attempted === 0) {
+      return { success: false, message: '未启用任何通知渠道，请先在系统配置中启用至少一个渠道' };
+    }
+
+    if (successCount === 0) {
+      return { success: false, message: '所有已启用渠道发送失败，请检查渠道配置' };
+    }
+
+    if (successCount < attempted) {
+      return { success: true, message: `测试通知部分成功（${successCount}/${attempted}）`, channelResults };
+    }
+
+    return { success: true, message: '测试通知已发送到所有启用的渠道', channelResults };
 
   } catch (error) {
     console.error('[手动测试] 发送失败:', error);
@@ -5419,46 +5435,58 @@ ${reminderText}
 async function sendNotificationToAllChannels(title, commonContent, config, logPrefix = '[定时任务]', options = {}) {
   const metadata = options.metadata || {};
   const skipTelegram = options.skipTelegram === true;
-    if (!config.ENABLED_NOTIFIERS || config.ENABLED_NOTIFIERS.length === 0) {
-        console.log(`${logPrefix} 未启用任何通知渠道。`);
-        return;
-    }
+  const collectResults = options.collectResults === true;
+  const channelResults = [];
 
-    if (config.ENABLED_NOTIFIERS.includes('notifyx')) {
-        const notifyxContent = `## ${title}\n\n${commonContent}`;
-        const success = await sendNotifyXNotification(title, notifyxContent, `订阅提醒`, config);
-        console.log(`${logPrefix} 发送NotifyX通知 ${success ? '成功' : '失败'}`);
-    }
-    if (!skipTelegram && config.ENABLED_NOTIFIERS.includes('telegram')) {
-        const telegramContent = `*${title}*\n\n${commonContent}`;
-        const sent = await sendTelegramNotification(telegramContent, config);
-        console.log(`${logPrefix} 发送Telegram通知 ${sent.ok ? '成功' : '失败'}`);
-    }
-    if (config.ENABLED_NOTIFIERS.includes('webhook')) {
-        const webhookContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
-        const success = await sendWebhookNotification(title, webhookContent, config, metadata);
-        console.log(`${logPrefix} 发送Webhook通知 ${success ? '成功' : '失败'}`);
-    }
-    if (config.ENABLED_NOTIFIERS.includes('wechatbot')) {
-        const wechatbotContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
-        const success = await sendWechatBotNotification(title, wechatbotContent, config);
-        console.log(`${logPrefix} 发送企业微信机器人通知 ${success ? '成功' : '失败'}`);
-    }
-    if (config.ENABLED_NOTIFIERS.includes('weixin')) {
-        const weixinContent = `【${title}】\n\n${commonContent.replace(/(\**|\*|##|#|`)/g, '')}`;
-        const result = await sendWeComNotification(weixinContent, config);
-        console.log(`${logPrefix} 发送企业微信通知 ${result.success ? '成功' : '失败'}. ${result.message}`);
-    }
-    if (config.ENABLED_NOTIFIERS.includes('email')) {
-        const emailContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
-        const success = await sendEmailNotification(title, emailContent, config);
-        console.log(`${logPrefix} 发送邮件通知 ${success ? '成功' : '失败'}`);
-    }
-    if (config.ENABLED_NOTIFIERS.includes('bark')) {
-        const barkContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
-        const success = await sendBarkNotification(title, barkContent, config);
-        console.log(`${logPrefix} 发送Bark通知 ${success ? '成功' : '失败'}`);
-    }
+  if (!config.ENABLED_NOTIFIERS || config.ENABLED_NOTIFIERS.length === 0) {
+    console.log(`${logPrefix} 未启用任何通知渠道。`);
+    return collectResults ? channelResults : undefined;
+  }
+
+  if (config.ENABLED_NOTIFIERS.includes('notifyx')) {
+    const notifyxContent = `## ${title}\n\n${commonContent}`;
+    const success = await sendNotifyXNotification(title, notifyxContent, `订阅提醒`, config);
+    console.log(`${logPrefix} 发送NotifyX通知 ${success ? '成功' : '失败'}`);
+    if (collectResults) channelResults.push({ channel: 'notifyx', success });
+  }
+  if (!skipTelegram && config.ENABLED_NOTIFIERS.includes('telegram')) {
+    const telegramContent = `*${title}*\n\n${commonContent}`;
+    const sent = await sendTelegramNotification(telegramContent, config);
+    console.log(`${logPrefix} 发送Telegram通知 ${sent.ok ? '成功' : '失败'}`);
+    if (collectResults) channelResults.push({ channel: 'telegram', success: !!sent.ok });
+  }
+  if (config.ENABLED_NOTIFIERS.includes('webhook')) {
+    const webhookContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
+    const success = await sendWebhookNotification(title, webhookContent, config, metadata);
+    console.log(`${logPrefix} 发送Webhook通知 ${success ? '成功' : '失败'}`);
+    if (collectResults) channelResults.push({ channel: 'webhook', success });
+  }
+  if (config.ENABLED_NOTIFIERS.includes('wechatbot')) {
+    const wechatbotContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
+    const success = await sendWechatBotNotification(title, wechatbotContent, config);
+    console.log(`${logPrefix} 发送企业微信机器人通知 ${success ? '成功' : '失败'}`);
+    if (collectResults) channelResults.push({ channel: 'wechatbot', success });
+  }
+  if (config.ENABLED_NOTIFIERS.includes('weixin')) {
+    const weixinContent = `【${title}】\n\n${commonContent.replace(/(\**|\*|##|#|`)/g, '')}`;
+    const result = await sendWeComNotification(weixinContent, config);
+    console.log(`${logPrefix} 发送企业微信通知 ${result.success ? '成功' : '失败'}. ${result.message}`);
+    if (collectResults) channelResults.push({ channel: 'weixin', success: !!result.success });
+  }
+  if (config.ENABLED_NOTIFIERS.includes('email')) {
+    const emailContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
+    const success = await sendEmailNotification(title, emailContent, config);
+    console.log(`${logPrefix} 发送邮件通知 ${success ? '成功' : '失败'}`);
+    if (collectResults) channelResults.push({ channel: 'email', success });
+  }
+  if (config.ENABLED_NOTIFIERS.includes('bark')) {
+    const barkContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
+    const success = await sendBarkNotification(title, barkContent, config);
+    console.log(`${logPrefix} 发送Bark通知 ${success ? '成功' : '失败'}`);
+    if (collectResults) channelResults.push({ channel: 'bark', success });
+  }
+
+  return collectResults ? channelResults : undefined;
 }
 
 async function sendTelegramNotification(message, config, options = {}) {
