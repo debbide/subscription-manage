@@ -4496,6 +4496,22 @@ function generateRandomSecret() {
   return result;
 }
 
+function resolveEnabledNotifiers(config) {
+  if (Array.isArray(config.ENABLED_NOTIFIERS) && config.ENABLED_NOTIFIERS.length > 0) {
+    return config.ENABLED_NOTIFIERS;
+  }
+
+  const inferred = [];
+  if (config.TG_BOT_TOKEN && config.TG_CHAT_ID) inferred.push('telegram');
+  if (config.NOTIFYX_API_KEY) inferred.push('notifyx');
+  if (config.WEBHOOK_URL) inferred.push('webhook');
+  if (config.WECHATBOT_WEBHOOK) inferred.push('wechatbot');
+  if (config.RESEND_API_KEY && config.EMAIL_FROM && config.EMAIL_TO) inferred.push('email');
+  if (config.BARK_DEVICE_KEY) inferred.push('bark');
+
+  return inferred.length > 0 ? inferred : ['notifyx'];
+}
+
 async function getConfig(env) {
   try {
     if (!env.SUBSCRIPTIONS_KV) {
@@ -4542,7 +4558,7 @@ async function getConfig(env) {
       BARK_DEVICE_KEY: config.BARK_DEVICE_KEY || '',
       BARK_SERVER: config.BARK_SERVER || 'https://api.day.app',
       BARK_IS_ARCHIVE: config.BARK_IS_ARCHIVE || 'false',
-      ENABLED_NOTIFIERS: config.ENABLED_NOTIFIERS || ['notifyx'],
+      ENABLED_NOTIFIERS: resolveEnabledNotifiers(config),
       TIMEZONE: config.TIMEZONE || 'UTC', // 新增时区字段
       NOTIFICATION_HOURS: Array.isArray(config.NOTIFICATION_HOURS) ? config.NOTIFICATION_HOURS : [],
       THIRD_PARTY_API_TOKEN: config.THIRD_PARTY_API_TOKEN || '',
