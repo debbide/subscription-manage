@@ -3775,6 +3775,9 @@ const configPage = `
 
         if (result.success) {
           showToast('配置保存成功', 'success');
+          if (result.webhookSyncMessage) {
+            showToast(result.webhookSyncMessage, result.webhookSyncMessage.includes('失败') ? 'warning' : 'success', 6000);
+          }
           passwordField.value = '';
           
           // 更新全局时区并重新显示时间
@@ -5418,6 +5421,19 @@ async function ensureTelegramCallbackWebhook(config, origin) {
   if (!setResult.ok) {
     const desc = setResult.result && setResult.result.description ? setResult.result.description : 'setWebhook failed';
     return { ok: false, skipped: false, message: desc };
+  }
+
+  const infoResult = await callTelegramApi('getWebhookInfo', config, {});
+  if (!infoResult.ok) {
+    const desc = infoResult.result && infoResult.result.description ? infoResult.result.description : 'getWebhookInfo failed';
+    return { ok: false, skipped: false, message: desc };
+  }
+
+  const currentUrl = String(infoResult.result?.result?.url || '');
+  if (currentUrl !== callbackUrl) {
+    const lastError = String(infoResult.result?.result?.last_error_message || '').trim();
+    const detail = lastError ? `，last_error: ${lastError}` : '';
+    return { ok: false, skipped: false, message: `webhook 校验失败，当前: ${currentUrl || '(空)'}，期望: ${callbackUrl}${detail}` };
   }
 
   return { ok: true, skipped: false, callbackUrl };
