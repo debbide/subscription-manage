@@ -63,6 +63,11 @@ Fork仓库,然后点击自己仓库里的部署按钮，等待部署完成,**注
 ### Telegram
 - **Bot Token**: 从 [@BotFather](https://t.me/BotFather) 获取
 - **Chat ID**: 从 [@userinfobot](https://t.me/userinfobot) 获取
+- **确认回调地址**: `https://你的域名/api/telegram/callback/<TG_CALLBACK_TOKEN>`
+- **回调说明**:
+  - 定时提醒消息会带 `✅ 已处理` 按钮
+  - 点击后仅确认本轮提醒已处理，下次仍按原周期（3天/1月/1年）继续提醒
+  - 未确认会按重推策略催办（默认每24小时，最多3次）
 
 ### NotifyX
 - **API Key**: 从 [NotifyX官网](https://www.notifyx.cn/) 获取
@@ -96,6 +101,16 @@ Fork仓库,然后点击自己仓库里的部署按钮，等待部署完成,**注
 - 通过 `POST /api/notify/{token}` 可触发系统通知，请在后台配置“第三方 API 访问令牌”
 - 令牌也可通过 `Authorization: Bearer <token>` 或 `?token=<token>` 传入
 - 未配置或令牌不匹配时接口会直接拒绝请求，建议定期更换随机令牌
+
+### ✅ TG 确认回调相关配置
+在系统配置中新增（或通过 KV 配置）：
+- `TG_CONFIRM_ENABLED`：是否启用确认回调（默认 `true`）
+- `TG_RESEND_INTERVAL_MINUTES`：未确认催办间隔（默认 `1440` 分钟）
+- `TG_RESEND_MAX_TIMES`：未确认最大催办次数（默认 `3`）
+- `TG_CALLBACK_TOKEN`：回调路由鉴权令牌（必填才会启用回调）
+
+建议将 Bot webhook 指向：
+- `POST /api/telegram/callback/<TG_CALLBACK_TOKEN>`
 
 
 > 💡 **提示**: 系统默认每天早上8点自动检查即将到期的订阅

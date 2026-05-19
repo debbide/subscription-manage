@@ -4115,6 +4115,10 @@ const api = {
       });
     }
 
+    if (path.startsWith('/telegram/callback/') && method === 'POST') {
+      return await handleTelegramCallback(request, env, config, path);
+    }
+
     const token = getCookieValue(request.headers.get('Cookie'), 'token');
     const user = token ? await verifyJWT(token, config.JWT_SECRET) : null;
 
@@ -4162,7 +4166,11 @@ const api = {
             BARK_IS_ARCHIVE: newConfig.BARK_IS_ARCHIVE || 'false',
             ENABLED_NOTIFIERS: newConfig.ENABLED_NOTIFIERS || ['notifyx'],
             TIMEZONE: newConfig.TIMEZONE || config.TIMEZONE || 'UTC',
-            THIRD_PARTY_API_TOKEN: newConfig.THIRD_PARTY_API_TOKEN || ''
+            THIRD_PARTY_API_TOKEN: newConfig.THIRD_PARTY_API_TOKEN || '',
+            TG_CONFIRM_ENABLED: newConfig.TG_CONFIRM_ENABLED !== false,
+            TG_RESEND_INTERVAL_MINUTES: Number.isFinite(Number(newConfig.TG_RESEND_INTERVAL_MINUTES)) ? Math.max(1, Math.floor(Number(newConfig.TG_RESEND_INTERVAL_MINUTES))) : (Number.isFinite(Number(config.TG_RESEND_INTERVAL_MINUTES)) ? Math.max(1, Math.floor(Number(config.TG_RESEND_INTERVAL_MINUTES))) : 1440),
+            TG_RESEND_MAX_TIMES: Number.isFinite(Number(newConfig.TG_RESEND_MAX_TIMES)) ? Math.max(0, Math.floor(Number(newConfig.TG_RESEND_MAX_TIMES))) : (Number.isFinite(Number(config.TG_RESEND_MAX_TIMES)) ? Math.max(0, Math.floor(Number(config.TG_RESEND_MAX_TIMES))) : 3),
+            TG_CALLBACK_TOKEN: (newConfig.TG_CALLBACK_TOKEN || config.TG_CALLBACK_TOKEN || '').trim()
           };
 
           const rawNotificationHours = Array.isArray(newConfig.NOTIFICATION_HOURS)
@@ -4228,7 +4236,8 @@ const api = {
           };
 
           const content = '*测试通知*\n\n这是一条测试通知，用于验证Telegram通知功能是否正常工作。\n\n发送时间: ' + formatBeijingTime();
-          success = await sendTelegramNotification(content, testConfig);
+          const sent = await sendTelegramNotification(content, testConfig);
+          success = sent.ok;
           message = success ? 'Telegram通知发送成功' : 'Telegram通知发送失败，请检查配置';
         } else if (body.type === 'notifyx') {
           const testConfig = {
@@ -4536,7 +4545,11 @@ async function getConfig(env) {
       ENABLED_NOTIFIERS: config.ENABLED_NOTIFIERS || ['notifyx'],
       TIMEZONE: config.TIMEZONE || 'UTC', // 新增时区字段
       NOTIFICATION_HOURS: Array.isArray(config.NOTIFICATION_HOURS) ? config.NOTIFICATION_HOURS : [],
-      THIRD_PARTY_API_TOKEN: config.THIRD_PARTY_API_TOKEN || ''
+      THIRD_PARTY_API_TOKEN: config.THIRD_PARTY_API_TOKEN || '',
+      TG_CONFIRM_ENABLED: config.TG_CONFIRM_ENABLED !== false,
+      TG_RESEND_INTERVAL_MINUTES: Number.isFinite(Number(config.TG_RESEND_INTERVAL_MINUTES)) ? Math.max(1, Math.floor(Number(config.TG_RESEND_INTERVAL_MINUTES))) : 1440,
+      TG_RESEND_MAX_TIMES: Number.isFinite(Number(config.TG_RESEND_MAX_TIMES)) ? Math.max(0, Math.floor(Number(config.TG_RESEND_MAX_TIMES))) : 3,
+      TG_CALLBACK_TOKEN: config.TG_CALLBACK_TOKEN || ''
     };
 
     console.log('[配置] 最终配置用户名:', finalConfig.ADMIN_USERNAME);
@@ -4568,7 +4581,11 @@ async function getConfig(env) {
       ENABLED_NOTIFIERS: ['notifyx'],
       NOTIFICATION_HOURS: [],
       TIMEZONE: 'UTC', // 新增时区字段
-      THIRD_PARTY_API_TOKEN: ''
+      THIRD_PARTY_API_TOKEN: '',
+      TG_CONFIRM_ENABLED: true,
+      TG_RESEND_INTERVAL_MINUTES: 1440,
+      TG_RESEND_MAX_TIMES: 3,
+      TG_CALLBACK_TOKEN: ''
     };
   }
 }
@@ -4697,7 +4714,8 @@ async function createSubscription(subscription, env) {
       isActive: subscription.isActive !== false,
       autoRenew: subscription.autoRenew !== false,
       useLunar: useLunar,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      telegramAck: getTelegramAckState({ expiryDate: subscription.expiryDate })
     };
 
     subscriptions.push(newSubscription);
@@ -4772,7 +4790,7 @@ if (useLunar) {
     };
     const reminderSetting = resolveReminderSetting(reminderSource);
 
-    subscriptions[index] = {
+    const mergedSubscription = {
       ...subscriptions[index],
       name: subscription.name,
       customType: subscription.customType || subscriptions[index].customType || '',
@@ -4791,6 +4809,9 @@ if (useLunar) {
       useLunar: useLunar,
       updatedAt: new Date().toISOString()
     };
+
+    mergedSubscription.telegramAck = getTelegramAckState(mergedSubscription);
+    subscriptions[index] = mergedSubscription;
 
     await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(subscriptions));
 
@@ -5120,6 +5141,114 @@ function resolveReminderSetting(subscription) {
   return { unit, value };
 }
 
+function generateTelegramAckNonce() {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  for (let i = 0; i < 16; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+function getSubscriptionCycleKey(subscription) {
+  return String(subscription?.expiryDate || '');
+}
+
+function getTelegramAckState(subscription) {
+  const cycleKey = getSubscriptionCycleKey(subscription);
+  const current = subscription && subscription.telegramAck && typeof subscription.telegramAck === 'object'
+    ? subscription.telegramAck
+    : null;
+
+  if (!current || current.cycleKey !== cycleKey) {
+    return {
+      cycleKey,
+      state: 'idle',
+      firstSentAt: '',
+      lastSentAt: '',
+      nextResendAt: '',
+      resendCount: 0,
+      confirmedAt: '',
+      confirmedBy: '',
+      messageId: null,
+      nonce: generateTelegramAckNonce()
+    };
+  }
+
+  return {
+    cycleKey,
+    state: current.state === 'pending' || current.state === 'confirmed' ? current.state : 'idle',
+    firstSentAt: current.firstSentAt || '',
+    lastSentAt: current.lastSentAt || '',
+    nextResendAt: current.nextResendAt || '',
+    resendCount: Number.isFinite(Number(current.resendCount)) ? Math.max(0, Math.floor(Number(current.resendCount))) : 0,
+    confirmedAt: current.confirmedAt || '',
+    confirmedBy: current.confirmedBy || '',
+    messageId: current.messageId || null,
+    nonce: current.nonce || generateTelegramAckNonce()
+  };
+}
+
+function getTelegramResendSettings(config) {
+  const enabled = config.TG_CONFIRM_ENABLED !== false;
+  const interval = Number.isFinite(Number(config.TG_RESEND_INTERVAL_MINUTES))
+    ? Math.max(1, Math.floor(Number(config.TG_RESEND_INTERVAL_MINUTES)))
+    : 1440;
+  const maxTimes = Number.isFinite(Number(config.TG_RESEND_MAX_TIMES))
+    ? Math.max(0, Math.floor(Number(config.TG_RESEND_MAX_TIMES)))
+    : 3;
+  return { enabled, interval, maxTimes };
+}
+
+function buildTelegramCallbackSigPayload(subscriptionId, ts, cycleKey, nonce) {
+  return `${subscriptionId}|${ts}|${cycleKey}|${nonce}`;
+}
+
+async function buildTelegramCallbackData(subscription, config) {
+  const ackState = getTelegramAckState(subscription);
+  const ts = Math.floor(Date.now() / 1000);
+  const payload = buildTelegramCallbackSigPayload(subscription.id, ts, ackState.cycleKey, ackState.nonce);
+  const sig = await CryptoJS.HmacSHA256(payload, config.JWT_SECRET);
+  return `smc|${subscription.id}|${ts}|${String(sig).slice(0, 8)}`;
+}
+
+
+async function callTelegramApi(method, config, payload) {
+  if (!config.TG_BOT_TOKEN) {
+    return { ok: false, result: null };
+  }
+  const url = `https://api.telegram.org/bot${config.TG_BOT_TOKEN}/${method}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {})
+  });
+  const result = await response.json();
+  return { ok: !!result.ok, result };
+}
+
+async function answerTelegramCallback(config, callbackQueryId, text) {
+  if (!callbackQueryId) {
+    return;
+  }
+  await callTelegramApi('answerCallbackQuery', config, {
+    callback_query_id: callbackQueryId,
+    text: text || '已处理',
+    show_alert: false
+  });
+}
+
+async function clearTelegramInlineKeyboard(config, chatId, messageId) {
+  if (!chatId || !messageId) {
+    return;
+  }
+  await callTelegramApi('editMessageReplyMarkup', config, {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: { inline_keyboard: [] }
+  });
+}
+
 function shouldTriggerReminder(reminder, daysDiff, hoursDiff) {
   if (!reminder) {
     return false;
@@ -5211,6 +5340,7 @@ ${reminderText}
 
 async function sendNotificationToAllChannels(title, commonContent, config, logPrefix = '[定时任务]', options = {}) {
   const metadata = options.metadata || {};
+  const skipTelegram = options.skipTelegram === true;
     if (!config.ENABLED_NOTIFIERS || config.ENABLED_NOTIFIERS.length === 0) {
         console.log(`${logPrefix} 未启用任何通知渠道。`);
         return;
@@ -5221,10 +5351,10 @@ async function sendNotificationToAllChannels(title, commonContent, config, logPr
         const success = await sendNotifyXNotification(title, notifyxContent, `订阅提醒`, config);
         console.log(`${logPrefix} 发送NotifyX通知 ${success ? '成功' : '失败'}`);
     }
-    if (config.ENABLED_NOTIFIERS.includes('telegram')) {
+    if (!skipTelegram && config.ENABLED_NOTIFIERS.includes('telegram')) {
         const telegramContent = `*${title}*\n\n${commonContent}`;
-        const success = await sendTelegramNotification(telegramContent, config);
-        console.log(`${logPrefix} 发送Telegram通知 ${success ? '成功' : '失败'}`);
+        const sent = await sendTelegramNotification(telegramContent, config);
+        console.log(`${logPrefix} 发送Telegram通知 ${sent.ok ? '成功' : '失败'}`);
     }
     if (config.ENABLED_NOTIFIERS.includes('webhook')) {
         const webhookContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
@@ -5253,32 +5383,36 @@ async function sendNotificationToAllChannels(title, commonContent, config, logPr
     }
 }
 
-async function sendTelegramNotification(message, config) {
+async function sendTelegramNotification(message, config, options = {}) {
   try {
     if (!config.TG_BOT_TOKEN || !config.TG_CHAT_ID) {
       console.error('[Telegram] 通知未配置，缺少Bot Token或Chat ID');
-      return false;
+      return { ok: false, messageId: null, result: null };
     }
 
     console.log('[Telegram] 开始发送通知到 Chat ID: ' + config.TG_CHAT_ID);
 
-    const url = 'https://api.telegram.org/bot' + config.TG_BOT_TOKEN + '/sendMessage';
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: config.TG_CHAT_ID,
-        text: message,
-        parse_mode: 'Markdown'
-      })
-    });
+    const payload = {
+      chat_id: config.TG_CHAT_ID,
+      text: message,
+      parse_mode: 'Markdown'
+    };
 
-    const result = await response.json();
+    if (options.replyMarkup) {
+      payload.reply_markup = options.replyMarkup;
+    }
+
+    const { ok, result } = await callTelegramApi('sendMessage', config, payload);
     console.log('[Telegram] 发送结果:', result);
-    return result.ok;
+
+    return {
+      ok,
+      messageId: result && result.result ? result.result.message_id : null,
+      result: result || null
+    };
   } catch (error) {
     console.error('[Telegram] 发送通知失败:', error);
-    return false;
+    return { ok: false, messageId: null, result: null };
   }
 }
 
@@ -5439,7 +5573,8 @@ async function sendNotification(title, content, description, config) {
   if (config.NOTIFICATION_TYPE === 'notifyx') {
     return await sendNotifyXNotification(title, content, description, config);
   } else {
-    return await sendTelegramNotification(content, config);
+    const sent = await sendTelegramNotification(content, config);
+    return sent.ok;
   }
 }
 
@@ -5449,10 +5584,9 @@ async function checkExpiringSubscriptions(env) {
     const config = await getConfig(env);
     const timezone = config?.TIMEZONE || 'UTC';
     const currentTime = getCurrentTimeInTimezone(timezone);
-    console.log('[定时任务] 开始检查即将到期的订阅 UTC: ' + new Date().toISOString() + ', ' + timezone + ': ' + currentTime.toLocaleString('zh-CN', {timeZone: timezone}));
+    console.log('[定时任务] 开始检查即将到期的订阅 UTC: ' + new Date().toISOString() + ', ' + timezone + ': ' + currentTime.toLocaleString('zh-CN', { timeZone: timezone }));
 
-    const currentMidnight = getTimezoneMidnightTimestamp(currentTime, timezone); // 统一计算当天的零点时间，避免多次格式化
-
+    const currentMidnight = getTimezoneMidnightTimestamp(currentTime, timezone);
     const rawNotificationHours = Array.isArray(config.NOTIFICATION_HOURS) ? config.NOTIFICATION_HOURS : [];
     const normalizedNotificationHours = rawNotificationHours
       .map(value => String(value).trim())
@@ -5464,175 +5598,281 @@ async function checkExpiringSubscriptions(env) {
     const shouldNotifyThisHour = allowAllHours || normalizedNotificationHours.length === 0 || normalizedNotificationHours.includes(currentHour);
 
     const subscriptions = await getAllSubscriptions(env);
+    const resendSettings = getTelegramResendSettings(config);
+    const confirmEnabled = resendSettings.enabled && config.ENABLED_NOTIFIERS && config.ENABLED_NOTIFIERS.includes('telegram');
+    const callbackEnabled = !!String(config.TG_CALLBACK_TOKEN || '').trim();
+
     console.log('[定时任务] 共找到 ' + subscriptions.length + ' 个订阅');
-    const expiringSubscriptions = [];
-    const updatedSubscriptions = [];
-    let hasUpdates = false;
 
-for (const subscription of subscriptions) {
-  if (subscription.isActive === false) {
-    console.log('[定时任务] 订阅 "' + subscription.name + '" 已停用，跳过');
-    continue;
-  }
+    const dueSubscriptions = [];
+    const updatedMap = new Map();
 
-  const reminderSetting = resolveReminderSetting(subscription);
-  let diffMs = 0;
-  let diffHours = 0;
-  let daysDiff;
-  if (subscription.useLunar) {
-    const expiryDate = new Date(subscription.expiryDate);
-    let lunar = lunarCalendar.solar2lunar(
-      expiryDate.getFullYear(),
-      expiryDate.getMonth() + 1,
-      expiryDate.getDate()
-    );
-    const solar = lunarBiz.lunar2solar(lunar);
-    const lunarDate = new Date(solar.year, solar.month - 1, solar.day);
-    const lunarMidnight = getTimezoneMidnightTimestamp(lunarDate, timezone);
-    
-    daysDiff = Math.round((lunarMidnight - currentMidnight) / MS_PER_DAY);
+    for (const original of subscriptions) {
+      if (original.isActive === false) {
+        continue;
+      }
 
-    console.log('[定时任务] 订阅 "' + subscription.name + '" 到期日期: ' + expiryDate.toISOString() + ', 农历转换后午夜时间: ' + new Date(lunarMidnight).toISOString() + ', 剩余天数: ' + daysDiff);
+      let subscription = { ...original };
+      const reminderSetting = resolveReminderSetting(subscription);
+      let daysDiff;
+      let diffHours;
 
-    diffMs = expiryDate.getTime() - currentTime.getTime();
-    diffHours = diffMs / MS_PER_HOUR;
+      if (subscription.useLunar) {
+        const expiryDate = new Date(subscription.expiryDate);
+        let lunar = lunarCalendar.solar2lunar(
+          expiryDate.getFullYear(),
+          expiryDate.getMonth() + 1,
+          expiryDate.getDate()
+        );
+        const solar = lunarBiz.lunar2solar(lunar);
+        const lunarDate = new Date(solar.year, solar.month - 1, solar.day);
+        const lunarMidnight = getTimezoneMidnightTimestamp(lunarDate, timezone);
+        daysDiff = Math.round((lunarMidnight - currentMidnight) / MS_PER_DAY);
+        diffHours = (expiryDate.getTime() - currentTime.getTime()) / MS_PER_HOUR;
 
-    if (daysDiff < 0 && subscription.periodValue && subscription.periodUnit && subscription.autoRenew !== false) {
-      let nextLunar = lunar;
-      do {
-        nextLunar = lunarBiz.addLunarPeriod(nextLunar, subscription.periodValue, subscription.periodUnit);
-        const solar = lunarBiz.lunar2solar(nextLunar);
-        var newExpiryDate = new Date(solar.year, solar.month - 1, solar.day);
-        const newLunarMidnight = getTimezoneMidnightTimestamp(newExpiryDate, timezone);
-        daysDiff = Math.round((newLunarMidnight - currentMidnight) / MS_PER_DAY);
-        console.log('[定时任务] 订阅 "' + subscription.name + '" 更新到期日期: ' + newExpiryDate.toISOString() + ', 农历转换后午夜时间: ' + new Date(newLunarMidnight).toISOString() + ', 剩余天数: ' + daysDiff);
-      } while (daysDiff < 0);
+        if (daysDiff < 0 && subscription.periodValue && subscription.periodUnit && subscription.autoRenew !== false) {
+          let nextLunar = lunar;
+          let newExpiryDate = expiryDate;
+          do {
+            nextLunar = lunarBiz.addLunarPeriod(nextLunar, subscription.periodValue, subscription.periodUnit);
+            const nextSolar = lunarBiz.lunar2solar(nextLunar);
+            newExpiryDate = new Date(nextSolar.year, nextSolar.month - 1, nextSolar.day);
+            const newLunarMidnight = getTimezoneMidnightTimestamp(newExpiryDate, timezone);
+            daysDiff = Math.round((newLunarMidnight - currentMidnight) / MS_PER_DAY);
+          } while (daysDiff < 0);
 
-      diffMs = newExpiryDate.getTime() - currentTime.getTime();
-      diffHours = diffMs / MS_PER_HOUR;
+          subscription = { ...subscription, expiryDate: newExpiryDate.toISOString() };
+          diffHours = (newExpiryDate.getTime() - currentTime.getTime()) / MS_PER_HOUR;
+        }
+      } else {
+        const expiryDate = new Date(subscription.expiryDate);
+        const expiryMidnight = getTimezoneMidnightTimestamp(expiryDate, timezone);
+        daysDiff = Math.round((expiryMidnight - currentMidnight) / MS_PER_DAY);
+        diffHours = (expiryDate.getTime() - currentTime.getTime()) / MS_PER_HOUR;
 
-      const updatedSubscription = { ...subscription, expiryDate: newExpiryDate.toISOString() };
-      updatedSubscriptions.push(updatedSubscription);
-      hasUpdates = true;
+        if (daysDiff < 0 && subscription.periodValue && subscription.periodUnit && subscription.autoRenew !== false) {
+          const newExpiryDate = new Date(expiryDate);
+          if (subscription.periodUnit === 'day') {
+            newExpiryDate.setDate(newExpiryDate.getDate() + subscription.periodValue);
+          } else if (subscription.periodUnit === 'month') {
+            newExpiryDate.setMonth(newExpiryDate.getMonth() + subscription.periodValue);
+          } else if (subscription.periodUnit === 'year') {
+            newExpiryDate.setFullYear(newExpiryDate.getFullYear() + subscription.periodValue);
+          }
 
-      const shouldRemindAfterRenewal = shouldTriggerReminder(reminderSetting, daysDiff, diffHours);
-      if (shouldRemindAfterRenewal) {
-        console.log('[定时任务] 订阅 "' + subscription.name + '" 在提醒范围内，将发送通知');
-        expiringSubscriptions.push({
-          ...updatedSubscription,
+          let newExpiryMidnight = getTimezoneMidnightTimestamp(newExpiryDate, timezone);
+          while (newExpiryMidnight < currentMidnight) {
+            if (subscription.periodUnit === 'day') {
+              newExpiryDate.setDate(newExpiryDate.getDate() + subscription.periodValue);
+            } else if (subscription.periodUnit === 'month') {
+              newExpiryDate.setMonth(newExpiryDate.getMonth() + subscription.periodValue);
+            } else if (subscription.periodUnit === 'year') {
+              newExpiryDate.setFullYear(newExpiryDate.getFullYear() + subscription.periodValue);
+            }
+            newExpiryMidnight = getTimezoneMidnightTimestamp(newExpiryDate, timezone);
+          }
+
+          subscription = { ...subscription, expiryDate: newExpiryDate.toISOString() };
+          daysDiff = Math.round((newExpiryMidnight - currentMidnight) / MS_PER_DAY);
+          diffHours = (newExpiryDate.getTime() - currentTime.getTime()) / MS_PER_HOUR;
+        }
+      }
+
+      const shouldRemind = daysDiff < 0 && subscription.autoRenew === false
+        ? true
+        : shouldTriggerReminder(reminderSetting, daysDiff, diffHours);
+
+      const ackState = getTelegramAckState(subscription);
+      subscription.telegramAck = ackState;
+
+      if (shouldRemind) {
+        dueSubscriptions.push({
+          ...subscription,
           daysRemaining: daysDiff,
           hoursRemaining: Math.round(diffHours)
         });
       }
-      continue;
+
+      if (JSON.stringify(subscription) !== JSON.stringify(original)) {
+        updatedMap.set(subscription.id, subscription);
+      }
     }
-  } else {
-    const expiryDate = new Date(subscription.expiryDate);
-    const expiryMidnight = getTimezoneMidnightTimestamp(expiryDate, timezone);
 
-    daysDiff = Math.round((expiryMidnight - currentMidnight) / MS_PER_DAY);
+    const canSendNow = shouldNotifyThisHour;
+    const normalNotifyList = [];
 
-    console.log('[定时任务] 订阅 "' + subscription.name + '" 到期日期: ' + expiryDate.toISOString() + ', 时区午夜时间: ' + new Date(expiryMidnight).toISOString() + ', 剩余天数: ' + daysDiff);
+    for (const due of dueSubscriptions) {
+      const currentAck = getTelegramAckState(due);
 
-    diffMs = expiryDate.getTime() - currentTime.getTime();
-    diffHours = diffMs / MS_PER_HOUR;
-
-    if (daysDiff < 0 && subscription.periodValue && subscription.periodUnit && subscription.autoRenew !== false) {
-      const newExpiryDate = new Date(expiryDate);
-
-      if (subscription.periodUnit === 'day') {
-        newExpiryDate.setDate(expiryDate.getDate() + subscription.periodValue);
-      } else if (subscription.periodUnit === 'month') {
-        newExpiryDate.setMonth(expiryDate.getMonth() + subscription.periodValue);
-      } else if (subscription.periodUnit === 'year') {
-        newExpiryDate.setFullYear(expiryDate.getFullYear() + subscription.periodValue);
+      if (!confirmEnabled || !callbackEnabled) {
+        normalNotifyList.push(due);
+        continue;
       }
 
-      let newExpiryMidnight = getTimezoneMidnightTimestamp(newExpiryDate, timezone);
-      while (newExpiryMidnight < currentMidnight) {
-        console.log('[定时任务] 新计算的到期日期 ' + newExpiryDate.toISOString() + ' (时区转换后午夜: ' + new Date(newExpiryMidnight).toISOString() + ') 仍然过期，继续计算下一个周期');
-        if (subscription.periodUnit === 'day') {
-          newExpiryDate.setDate(newExpiryDate.getDate() + subscription.periodValue);
-        } else if (subscription.periodUnit === 'month') {
-          newExpiryDate.setMonth(newExpiryDate.getMonth() + subscription.periodValue);
-        } else if (subscription.periodUnit === 'year') {
-          newExpiryDate.setFullYear(newExpiryDate.getFullYear() + subscription.periodValue);
+      if (!canSendNow) {
+        continue;
+      }
+
+      const isPending = currentAck.state === 'pending';
+      const isConfirmed = currentAck.state === 'confirmed';
+      const nowTs = Date.now();
+      const nextResendTs = currentAck.nextResendAt ? new Date(currentAck.nextResendAt).getTime() : 0;
+
+      if (isConfirmed) {
+        continue;
+      }
+
+      const shouldSendInitial = currentAck.state === 'idle';
+      const shouldResend = isPending && currentAck.resendCount < resendSettings.maxTimes && nowTs >= nextResendTs;
+
+      if (!shouldSendInitial && !shouldResend) {
+        continue;
+      }
+
+      const callbackData = await buildTelegramCallbackData(due, config);
+      const telegramContent = `*订阅到期提醒*\n\n${formatNotificationContent([due], config)}`;
+      const sent = await sendTelegramNotification(telegramContent, config, {
+        replyMarkup: {
+          inline_keyboard: [[{ text: '✅ 已处理', callback_data: callbackData }]]
         }
-        newExpiryMidnight = getTimezoneMidnightTimestamp(newExpiryDate, timezone);
-      }
-
-      console.log('[定时任务] 订阅 "' + subscription.name + '" 更新到期日期: ' + newExpiryDate.toISOString());
-
-      diffMs = newExpiryDate.getTime() - currentTime.getTime();
-      diffHours = diffMs / MS_PER_HOUR;
-
-      const updatedSubscription = { ...subscription, expiryDate: newExpiryDate.toISOString() };
-      updatedSubscriptions.push(updatedSubscription);
-      hasUpdates = true;
-
-      const newDaysDiff = Math.round((newExpiryMidnight - currentMidnight) / MS_PER_DAY);
-      const shouldRemindAfterRenewal = shouldTriggerReminder(reminderSetting, newDaysDiff, diffHours);
-      if (shouldRemindAfterRenewal) {
-        console.log('[定时任务] 订阅 "' + subscription.name + '" 在提醒范围内，将发送通知');
-        expiringSubscriptions.push({
-          ...updatedSubscription,
-          daysRemaining: newDaysDiff,
-          hoursRemaining: Math.round(diffHours)
-        });
-      }
-      continue;
-    }
-  }
-
-  diffMs = new Date(subscription.expiryDate).getTime() - currentTime.getTime();
-  diffHours = diffMs / MS_PER_HOUR;
-  const shouldRemind = shouldTriggerReminder(reminderSetting, daysDiff, diffHours);
-
-  if (daysDiff < 0 && subscription.autoRenew === false) {
-    console.log('[定时任务] 订阅 "' + subscription.name + '" 已过期且未启用自动续订，将发送过期通知');
-    expiringSubscriptions.push({
-      ...subscription,
-      daysRemaining: daysDiff,
-      hoursRemaining: Math.round(diffHours)
-    });
-  } else if (shouldRemind) {
-    console.log('[定时任务] 订阅 "' + subscription.name + '" 在提醒范围内，将发送通知');
-    expiringSubscriptions.push({
-      ...subscription,
-      daysRemaining: daysDiff,
-      hoursRemaining: Math.round(diffHours)
-    });
-  }
-}
-
-    if (hasUpdates) {
-      const mergedSubscriptions = subscriptions.map(sub => {
-        const updated = updatedSubscriptions.find(u => u.id === sub.id);
-        return updated || sub;
       });
-      await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(mergedSubscriptions));
+
+      if (sent.ok) {
+        const nextResendAt = new Date(nowTs + resendSettings.interval * 60 * 1000).toISOString();
+        const nextAck = {
+          ...currentAck,
+          state: 'pending',
+          firstSentAt: currentAck.firstSentAt || new Date(nowTs).toISOString(),
+          lastSentAt: new Date(nowTs).toISOString(),
+          nextResendAt,
+          resendCount: shouldSendInitial ? 0 : currentAck.resendCount + 1,
+          messageId: sent.messageId || currentAck.messageId,
+          confirmedAt: '',
+          confirmedBy: ''
+        };
+        updatedMap.set(due.id, { ...due, telegramAck: nextAck });
+      }
     }
 
-    if (expiringSubscriptions.length > 0) {
-      if (!shouldNotifyThisHour) {
-        console.log('[定时任务] 当前小时 ' + currentHour + ' 未配置为推送时间，跳过发送通知');
-        expiringSubscriptions.length = 0;
-      } else {
-        // 按到期时间排序
-        expiringSubscriptions.sort((a, b) => a.daysRemaining - b.daysRemaining);
+    if (normalNotifyList.length > 0 && canSendNow) {
+      normalNotifyList.sort((a, b) => a.daysRemaining - b.daysRemaining);
+      const commonContent = formatNotificationContent(normalNotifyList, config);
+      const metadataTags = extractTagsFromSubscriptions(normalNotifyList);
+      const title = '订阅到期提醒';
+      await sendNotificationToAllChannels(title, commonContent, config, '[定时任务]', {
+        metadata: { tags: metadataTags },
+        skipTelegram: confirmEnabled && callbackEnabled
+      });
+    }
 
-        // 使用优化的格式化函数
-        const commonContent = formatNotificationContent(expiringSubscriptions, config);
-        const metadataTags = extractTagsFromSubscriptions(expiringSubscriptions);
-
-        const title = '订阅到期提醒';
-        await sendNotificationToAllChannels(title, commonContent, config, '[定时任务]', {
-          metadata: { tags: metadataTags }
-        });
-      }
+    if (updatedMap.size > 0) {
+      const merged = subscriptions.map(item => updatedMap.get(item.id) || item);
+      await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(merged));
     }
   } catch (error) {
     console.error('[定时任务] 检查即将到期的订阅失败:', error);
+  }
+}
+
+async function handleTelegramCallback(request, env, config, path) {
+  try {
+    const routeToken = decodeURIComponent((path.split('/')[3] || '').trim());
+    const expectedToken = String(config.TG_CALLBACK_TOKEN || '').trim();
+
+    if (!expectedToken || routeToken !== expectedToken) {
+      return new Response(JSON.stringify({ ok: false, message: 'invalid callback token' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const update = await request.json();
+    const callbackQuery = update && update.callback_query ? update.callback_query : null;
+    if (!callbackQuery) {
+      return new Response(JSON.stringify({ ok: true, message: 'ignored' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const callbackData = String(callbackQuery.data || '');
+    const parts = callbackData.split('|');
+    if (parts.length !== 4 || parts[0] !== 'smc') {
+      await answerTelegramCallback(config, callbackQuery.id, '回调参数无效');
+      return new Response(JSON.stringify({ ok: true, message: 'invalid data' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const subscriptionId = parts[1];
+    const ts = parts[2];
+    const shortSig = parts[3];
+
+    const subscriptions = await getAllSubscriptions(env);
+    const index = subscriptions.findIndex(item => item.id === subscriptionId);
+    if (index === -1) {
+      await answerTelegramCallback(config, callbackQuery.id, '订阅不存在或已删除');
+      return new Response(JSON.stringify({ ok: true, message: 'subscription not found' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const current = subscriptions[index];
+    const ackState = getTelegramAckState(current);
+
+    if (ackState.state === 'confirmed') {
+      await answerTelegramCallback(config, callbackQuery.id, '本轮已确认');
+      return new Response(JSON.stringify({ ok: true, message: 'already confirmed' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const payload = buildTelegramCallbackSigPayload(subscriptionId, ts, ackState.cycleKey, ackState.nonce);
+    const expectedSig = String(await CryptoJS.HmacSHA256(payload, config.JWT_SECRET)).slice(0, 8);
+    if (expectedSig !== shortSig) {
+      await answerTelegramCallback(config, callbackQuery.id, '签名校验失败');
+      return new Response(JSON.stringify({ ok: false, message: 'signature mismatch' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const chatIdFromUpdate = callbackQuery.message && callbackQuery.message.chat ? String(callbackQuery.message.chat.id) : '';
+    if (String(config.TG_CHAT_ID || '') && chatIdFromUpdate && chatIdFromUpdate !== String(config.TG_CHAT_ID)) {
+      await answerTelegramCallback(config, callbackQuery.id, '无权限操作该提醒');
+      return new Response(JSON.stringify({ ok: false, message: 'chat not allowed' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const nextAck = {
+      ...ackState,
+      state: 'confirmed',
+      confirmedAt: new Date().toISOString(),
+      confirmedBy: callbackQuery.from ? String(callbackQuery.from.id || '') : '',
+      nextResendAt: ''
+    };
+
+    subscriptions[index] = {
+      ...current,
+      telegramAck: nextAck
+    };
+
+    await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(subscriptions));
+    await answerTelegramCallback(config, callbackQuery.id, '已确认，下周期按原规则继续提醒');
+
+    const message = callbackQuery.message || {};
+    await clearTelegramInlineKeyboard(config, message.chat ? message.chat.id : null, message.message_id);
+
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('[Telegram Callback] 处理失败:', error);
+    return new Response(JSON.stringify({ ok: false, message: error.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
 
