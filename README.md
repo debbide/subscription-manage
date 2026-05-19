@@ -72,9 +72,14 @@
   <img src="https://img.shields.io/badge/Docs-Find_Account_ID-1F6FEB?style=for-the-badge&logo=readthedocs&logoColor=white" alt="查看官方文档" />
 </a>
 
+##### `CF_KV_NAMESPACE_TITLE`（可选：KV 空间名称）
+- 用途：控制自动创建时的 KV 命名空间名称
+- 不填时默认：`SUBSCRIPTIONS_KV`
+- 示例：`SUBSCRIPTIONS_KV_DEBBIDE`
+
 #### 3) 自动化行为
 - 工作流会先检查 `wrangler.toml` 中 KV ID
-- 若未配置或是占位符，会自动创建 `SUBSCRIPTIONS_KV` 命名空间并回填 `wrangler.toml`
+- 若未配置或是占位符，会自动创建 KV 命名空间（名称优先使用 `CF_KV_NAMESPACE_TITLE`，不填则默认 `SUBSCRIPTIONS_KV`）并回填 `wrangler.toml`
 - 然后执行：`wrangler deploy --env production`
 
 你需要截图给我的位置：
