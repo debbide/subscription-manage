@@ -5010,8 +5010,9 @@ async function testSingleSubscriptionNotification(id, env) {
 
 async function testSingleSubscriptionCallbackMessage(id, env) {
   try {
-    const subscription = await getSubscription(id, env);
-    if (!subscription) {
+    const subscriptions = await getAllSubscriptions(env);
+    const index = subscriptions.findIndex(item => item.id === id);
+    if (index === -1) {
       return { success: false, message: '未找到该订阅' };
     }
 
@@ -5026,15 +5027,29 @@ async function testSingleSubscriptionCallbackMessage(id, env) {
       return { success: false, message: '请先配置 TG_CALLBACK_TOKEN' };
     }
 
-    const ackState = getTelegramAckState(subscription);
-    const callbackData = await buildTelegramCallbackData({ ...subscription, telegramAck: ackState }, config);
+    const subscription = subscriptions[index];
+    const baseAck = getTelegramAckState(subscription);
+    const testAck = {
+      ...baseAck,
+      state: 'idle',
+      nonce: generateTelegramAckNonce(),
+      confirmedAt: '',
+      confirmedBy: '',
+      messageId: null
+    };
+
+    const preparedSubscription = { ...subscription, telegramAck: testAck };
+    subscriptions[index] = preparedSubscription;
+    await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(subscriptions));
+
+    const callbackData = await buildTelegramCallbackData(preparedSubscription, config);
     const timezone = config?.TIMEZONE || 'UTC';
-    const expiryText = formatTimeInTimezone(new Date(subscription.expiryDate), timezone, 'datetime');
+    const expiryText = formatTimeInTimezone(new Date(preparedSubscription.expiryDate), timezone, 'datetime');
 
     const telegramContent = [
       '*回调流程测试消息*',
       '',
-      `订阅: ${subscription.name || '未命名订阅'}`,
+      `订阅: ${preparedSubscription.name || '未命名订阅'}`,
       `到期: ${expiryText}`,
       '点击下方“✅ 已处理”可立即验证 callback 回调链路。'
     ].join('\n');
@@ -5048,6 +5063,14 @@ async function testSingleSubscriptionCallbackMessage(id, env) {
     if (!sent.ok) {
       return { success: false, message: '回调测试消息发送失败，请检查 Telegram 配置' };
     }
+
+    const finalAck = {
+      ...testAck,
+      lastSentAt: new Date().toISOString(),
+      messageId: sent.messageId || null
+    };
+    subscriptions[index] = { ...preparedSubscription, telegramAck: finalAck };
+    await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(subscriptions));
 
     return { success: true, message: '回调测试消息已发送，请到 Telegram 点击“✅ 已处理”验证回调' };
   } catch (error) {
