@@ -4902,31 +4902,38 @@ async function updateSubscription(id, subscription, env) {
       return { success: false, message: '缺少必填字段' };
     }
 
+    const existingSubscription = subscriptions[index];
+    const previousExpiryDateOnly = String(existingSubscription.expiryDate || '').split('T')[0];
+    const incomingExpiryDateOnly = String(subscription.expiryDate || '').split('T')[0];
+    const shouldAutoAdvanceExpiry = incomingExpiryDateOnly !== previousExpiryDateOnly;
+    if (!shouldAutoAdvanceExpiry) {
+      subscription.expiryDate = existingSubscription.expiryDate;
+    }
+
     let expiryDate = new Date(subscription.expiryDate);
     const config = await getConfig(env);
     const timezone = config?.TIMEZONE || 'UTC';
     const currentTime = getCurrentTimeInTimezone(timezone);
 
-let useLunar = !!subscription.useLunar;
-if (useLunar) {
-  let lunar = lunarCalendar.solar2lunar(
-    expiryDate.getFullYear(),
-    expiryDate.getMonth() + 1,
-    expiryDate.getDate()
-  );
-  if (!lunar) {
-    return { success: false, message: '农历日期超出支持范围（1900-2100年）' };
-  }
-  if (lunar && expiryDate < currentTime && subscription.periodValue && subscription.periodUnit) {
-    // 新增：循环加周期，直到 expiryDate > currentTime
-    do {
-      lunar = lunarBiz.addLunarPeriod(lunar, subscription.periodValue, subscription.periodUnit);
-      const solar = lunarBiz.lunar2solar(lunar);
-      expiryDate = new Date(solar.year, solar.month - 1, solar.day);
-    } while (expiryDate < currentTime);
-    subscription.expiryDate = expiryDate.toISOString();
-  }
-} else {
+    let useLunar = !!subscription.useLunar;
+    if (shouldAutoAdvanceExpiry && useLunar) {
+      let lunar = lunarCalendar.solar2lunar(
+        expiryDate.getFullYear(),
+        expiryDate.getMonth() + 1,
+        expiryDate.getDate()
+      );
+      if (!lunar) {
+        return { success: false, message: '农历日期超出支持范围（1900-2100年）' };
+      }
+      if (lunar && expiryDate < currentTime && subscription.periodValue && subscription.periodUnit) {
+        do {
+          lunar = lunarBiz.addLunarPeriod(lunar, subscription.periodValue, subscription.periodUnit);
+          const solar = lunarBiz.lunar2solar(lunar);
+          expiryDate = new Date(solar.year, solar.month - 1, solar.day);
+        } while (expiryDate < currentTime);
+        subscription.expiryDate = expiryDate.toISOString();
+      }
+    } else if (shouldAutoAdvanceExpiry) {
       if (expiryDate < currentTime && subscription.periodValue && subscription.periodUnit) {
         while (expiryDate < currentTime) {
           if (subscription.periodUnit === 'day') {
