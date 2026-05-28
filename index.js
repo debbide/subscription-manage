@@ -971,7 +971,15 @@ const adminPage = `
             <div class="error-message text-red-500"></div>
           </div>
         </div>
-        
+
+        <div>
+          <label for="projectUrl" class="block text-sm font-medium text-gray-700 mb-1">项目链接</label>
+          <input type="url" id="projectUrl" placeholder="https://example.com"
+            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+          <p class="mt-1 text-xs text-gray-500">填写后 Telegram 确认提醒会显示“🔗 打开项目”按钮</p>
+          <div class="error-message text-red-500"></div>
+        </div>
+
         <div class="mb-4 flex items-center space-x-6">
           <label class="lunar-toggle">
             <input type="checkbox" id="showLunar" class="form-checkbox h-4 w-4 text-indigo-600">
@@ -1645,7 +1653,34 @@ const lunarBiz = {
         isValid = false;
       }
 
+      const projectUrl = document.getElementById('projectUrl').value.trim();
+      if (projectUrl) {
+        try {
+          const parsedUrl = new URL(projectUrl);
+          if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+            showFieldError('projectUrl', '项目链接必须以 http:// 或 https:// 开头');
+            isValid = false;
+          }
+        } catch (error) {
+          showFieldError('projectUrl', '请输入有效的项目链接');
+          isValid = false;
+        }
+      }
+
       return isValid;
+    }
+
+    function normalizeProjectUrl(url) {
+      const value = String(url || '').trim();
+      if (!value) {
+        return '';
+      }
+      try {
+        const parsedUrl = new URL(value);
+        return (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') ? parsedUrl.href : '';
+      } catch (error) {
+        return '';
+      }
     }
 
     // 创建带悬浮提示的文本元素
@@ -1837,7 +1872,8 @@ const lunarBiz = {
             subscription.name,
             subscription.customType,
             subscription.notes,
-            subscription.category
+            subscription.category,
+            subscription.projectUrl
           ].filter(Boolean).join(' ').toLowerCase();
           return haystack.includes(keyword);
         });
@@ -1940,6 +1976,10 @@ const lunarBiz = {
           }
         }
 
+        const projectUrl = normalizeProjectUrl(subscription.projectUrl);
+        const projectLinkHtml = projectUrl
+          ? '<a href="' + projectUrl.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener noreferrer" class="inline-flex items-center mt-1 text-xs text-indigo-600 hover:text-indigo-800"><i class="fas fa-link mr-1"></i>打开项目</a>'
+          : '';
         const nameHtml = createHoverText(subscription.name, 20, 'text-sm font-medium text-gray-900');
         const typeHtml = createHoverText(subscription.customType || '其他', 15, 'text-sm text-gray-900');
         const periodHtml = periodText ? createHoverText('周期: ' + periodText, 20, 'text-xs text-gray-500 mt-1') : '';
@@ -1992,6 +2032,7 @@ const lunarBiz = {
         row.innerHTML =
           '<td data-label="名称" class="px-4 py-3"><div class="td-content-wrapper">' +
             nameHtml +
+            projectLinkHtml +
             notesHtml +
           '</div></td>' +
           '<td data-label="类型" class="px-4 py-3"><div class="td-content-wrapper space-y-1">' +
@@ -2193,6 +2234,7 @@ const lunarBiz = {
       const today = new Date().toISOString().split('T')[0]; // 前端使用本地时间
       document.getElementById('startDate').value = today;
       document.getElementById('category').value = '';
+      document.getElementById('projectUrl').value = '';
       document.getElementById('reminderValue').value = '7';
       document.getElementById('reminderUnit').value = 'day';
       document.getElementById('isActive').checked = true;
@@ -2867,6 +2909,7 @@ const lunarBiz = {
         customType: document.getElementById('customType').value.trim(),
         category: document.getElementById('category').value.trim(),
         notes: document.getElementById('notes').value.trim() || '',
+        projectUrl: normalizeProjectUrl(document.getElementById('projectUrl').value),
         isActive: document.getElementById('isActive').checked,
         autoRenew: document.getElementById('autoRenew').checked,
         startDate: document.getElementById('startDate').value,
@@ -2927,6 +2970,7 @@ const lunarBiz = {
           document.getElementById('name').value = subscription.name;
           document.getElementById('customType').value = subscription.customType || '';
           document.getElementById('category').value = subscription.category || '';
+          document.getElementById('projectUrl').value = subscription.projectUrl || '';
           document.getElementById('notes').value = subscription.notes || '';
           document.getElementById('isActive').checked = subscription.isActive !== false;
           document.getElementById('autoRenew').checked = subscription.autoRenew !== false;
@@ -4816,6 +4860,7 @@ async function createSubscription(subscription, env) {
       name: subscription.name,
       customType: subscription.customType || '',
       category: subscription.category ? subscription.category.trim() : '',
+      projectUrl: normalizeHttpUrl(subscription.projectUrl),
       startDate: subscription.startDate || null,
       expiryDate: subscription.expiryDate,
       periodValue: subscription.periodValue || 1,
@@ -4909,6 +4954,7 @@ if (useLunar) {
       name: subscription.name,
       customType: subscription.customType || subscriptions[index].customType || '',
       category: subscription.category !== undefined ? subscription.category.trim() : (subscriptions[index].category || ''),
+      projectUrl: subscription.projectUrl !== undefined ? normalizeHttpUrl(subscription.projectUrl) : (subscriptions[index].projectUrl || ''),
       startDate: subscription.startDate || subscriptions[index].startDate,
       expiryDate: subscription.expiryDate,
       periodValue: subscription.periodValue || subscriptions[index].periodValue || 1,
@@ -5096,9 +5142,7 @@ async function testSingleSubscriptionCallbackMessage(id, env, origin) {
     ].join('\n');
 
     const sent = await sendTelegramNotification(telegramContent, config, {
-      replyMarkup: {
-        inline_keyboard: [[{ text: '✅ 已处理', callback_data: callbackData }]]
-      }
+      replyMarkup: buildTelegramReminderKeyboard(preparedSubscription, callbackData)
     });
 
     if (!sent.ok) {
@@ -5482,6 +5526,29 @@ async function clearTelegramInlineKeyboard(config, chatId, messageId) {
     message_id: messageId,
     reply_markup: { inline_keyboard: [] }
   });
+}
+
+function normalizeHttpUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) {
+    return '';
+  }
+  try {
+    const parsedUrl = new URL(value);
+    return (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') ? parsedUrl.href : '';
+  } catch (error) {
+    return '';
+  }
+}
+
+function buildTelegramReminderKeyboard(subscription, callbackData) {
+  const row = [];
+  const projectUrl = normalizeHttpUrl(subscription && subscription.projectUrl);
+  if (projectUrl) {
+    row.push({ text: '🔗 打开项目', url: projectUrl });
+  }
+  row.push({ text: '✅ 已处理', callback_data: callbackData });
+  return { inline_keyboard: [row] };
 }
 
 function addPeriodToDate(date, periodValue, periodUnit) {
@@ -6151,9 +6218,7 @@ async function checkExpiringSubscriptions(env) {
       const callbackData = await buildTelegramCallbackData(due, config);
       const telegramContent = `*订阅到期提醒*\n\n${formatNotificationContent([due], config)}`;
       const sent = await sendTelegramNotification(telegramContent, config, {
-        replyMarkup: {
-          inline_keyboard: [[{ text: '✅ 已处理', callback_data: callbackData }]]
-        }
+        replyMarkup: buildTelegramReminderKeyboard(due, callbackData)
       });
 
       if (sent.ok) {
